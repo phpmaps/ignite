@@ -56,6 +56,7 @@ import org.apache.ignite.internal.processors.cache.tree.CacheDataTree;
 import org.apache.ignite.internal.processors.cache.tree.DataRow;
 import org.apache.ignite.internal.processors.cache.tree.MvccDataRow;
 import org.apache.ignite.internal.processors.cache.tree.MvccSearchRow;
+import org.apache.ignite.internal.processors.cache.tree.MvccVersionBasedSearchRow;
 import org.apache.ignite.internal.processors.cache.tree.PendingEntriesTree;
 import org.apache.ignite.internal.processors.cache.tree.PendingRow;
 import org.apache.ignite.internal.processors.cache.tree.SearchRow;
@@ -1647,14 +1648,22 @@ public class IgniteCacheOffheapManagerImpl implements IgniteCacheOffheapManager 
             CacheDataRow row;
 
             if (grp.mvccEnabled()) {
-                // TODO IGNITE-3484: need special method.
-                GridCursor<CacheDataRow> cur = dataTree.find(new MvccSearchRow(cacheId, key, Long.MAX_VALUE, Long.MAX_VALUE),
-                    new MvccSearchRow(cacheId, key, 1, 1));
+                if (false) {
+                    row = dataTree.findOneBounded(
+                        new MvccSearchRow(cacheId, key, Long.MAX_VALUE, Long.MAX_VALUE),
+                        new MvccSearchRow(cacheId, key, 1L, 1L),
+                        null,
+                        CacheDataRowAdapter.RowData.NO_KEY);
+                }
+                else {
+                    GridCursor<CacheDataRow> cur = dataTree.find(new MvccSearchRow(cacheId, key, Long.MAX_VALUE, Long.MAX_VALUE),
+                        new MvccSearchRow(cacheId, key, 1, 1));
 
-                if (cur.next())
-                    row = cur.get();
-                else
-                    row = null;
+                    if (cur.next())
+                        row = cur.get();
+                    else
+                        row = null;
+                }
             }
             else
                 row = dataTree.findOne(new SearchRow(cacheId, key), CacheDataRowAdapter.RowData.NO_KEY);
@@ -1705,41 +1714,53 @@ public class IgniteCacheOffheapManagerImpl implements IgniteCacheOffheapManager 
 
             int cacheId = grp.sharedGroup() ? cctx.cacheId() : CU.UNDEFINED_CACHE_ID;
 
-            // TODO IGNITE-3484: need special method.
-            GridCursor<CacheDataRow> cur = dataTree.find(
-                new MvccSearchRow(cacheId, key, ver.coordinatorVersion(), ver.counter()),
-                new MvccSearchRow(cacheId, key, 1, 1));
+            if (false) {
+                MvccVersionBasedSearchRow lower = new MvccVersionBasedSearchRow(cacheId, key, ver);
 
-            CacheDataRow row = null;
+                CacheDataRow row = dataTree.findOneBounded(
+                    lower,
+                    new MvccSearchRow(cacheId, key, 1L, 1L),
+                    lower, // Use the same instance as predicate to do not create extra object.
+                    CacheDataRowAdapter.RowData.NO_KEY);
 
-            MvccLongList txs = ver.activeTransactions();
+                afterRowFound(row, key);
 
-            while (cur.next()) {
-                CacheDataRow row0 = cur.get();
-
-                assert row0.mvccCoordinatorVersion() > 0 : row0;
-
-                boolean visible;
-
-                if (txs != null) {
-                    visible = row0.mvccCoordinatorVersion() != ver.coordinatorVersion()
-                        || !txs.contains(row0.mvccCounter());
-                }
-                else
-                    visible = true;
-
-                if (visible) {
-                    row = row0;
-
-                    break;
-                }
+                return row;
             }
+            else {
+                GridCursor<CacheDataRow> cur = dataTree.find(
+                    new MvccSearchRow(cacheId, key, ver.coordinatorVersion(), ver.counter()),
+                    new MvccSearchRow(cacheId, key, 1, 1));
 
-            assert row == null || key.equals(row.key());
+                CacheDataRow row = null;
 
-            //afterRowFound(row, key);
+                MvccLongList txs = ver.activeTransactions();
 
-            return row;
+                while (cur.next()) {
+                    CacheDataRow row0 = cur.get();
+
+                    assert row0.mvccCoordinatorVersion() > 0 : row0;
+
+                    boolean visible;
+
+                    if (txs != null) {
+                        visible = row0.mvccCoordinatorVersion() != ver.coordinatorVersion()
+                            || !txs.contains(row0.mvccCounter());
+                    }
+                    else
+                        visible = true;
+
+                    if (visible) {
+                        row = row0;
+
+                        break;
+                    }
+                }
+
+                assert row == null || key.equals(row.key());
+
+                return row;
+            }
         }
 
         /**

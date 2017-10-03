@@ -2509,14 +2509,14 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
      */
     private final class GetCursor extends Get {
         /** */
-        ForwardCursor cursor;
+        AbstractForwardCursor cursor;
 
         /**
          * @param lower Lower bound.
          * @param shift Shift.
          * @param cursor Cursor.
          */
-        GetCursor(L lower, int shift, ForwardCursor cursor) {
+        GetCursor(L lower, int shift, AbstractForwardCursor cursor) {
             super(lower, false);
 
             assert shift != 0; // Either handle range of equal rows or find a greater row after concurrent merge.
@@ -4384,52 +4384,85 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
      */
     protected abstract T getRow(BPlusIO<L> io, long pageAddr, int idx, Object x) throws IgniteCheckedException;
 
+    public interface RowPredicate<L, T extends L> {
+        public boolean apply(BPlusTree<L, T> tree, BPlusIO<L> io, long pageAddr, int idx) throws IgniteCheckedException;
+    }
+
+    public T findOneBounded(L lower, L upper, RowPredicate<L, T> p, Object x) throws IgniteCheckedException {
+        checkDestroyed();
+
+        try {
+            FindOneCursor cursor = new FindOneCursor(lower, upper, p, x);
+
+            return cursor.findOne();
+        }
+        catch (IgniteCheckedException e) {
+            throw new IgniteCheckedException("Runtime failure on bounds: [lower=" + lower + ", upper=" + upper + "]", e);
+        }
+        catch (RuntimeException e) {
+            throw new IgniteException("Runtime failure on bounds: [lower=" + lower + ", upper=" + upper + "]", e);
+        }
+        catch (AssertionError e) {
+            throw new AssertionError("Assertion error on bounds: [lower=" + lower + ", upper=" + upper + "]", e);
+        }
+        finally {
+            checkDestroyed();
+        }
+    }
+
     /**
-     * Forward cursor.
+     *
      */
     @SuppressWarnings("unchecked")
-    private final class ForwardCursor implements GridCursor<T> {
+    private abstract class AbstractForwardCursor {
         /** */
-        private T[] rows = (T[])EMPTY;
+        long nextPageId;
 
         /** */
-        private int row = -1;
-
-        /** */
-        private long nextPageId;
-
-        /** */
-        private L lowerBound;
+        L lowerBound;
 
         /** */
         private int lowerShift = -1; // Initially it is -1 to handle multiple equal rows.
 
         /** */
-        private final L upperBound;
+        final L upperBound;
 
         /** */
-        private final Object x;
-
-        /**
-         * @param lowerBound Lower bound.
-         * @param upperBound Upper bound.
-         */
-        ForwardCursor(L lowerBound, L upperBound) {
-            this.lowerBound = lowerBound;
-            this.upperBound = upperBound;
-            this.x = null;
-        }
+        final Object x;
 
         /**
          * @param lowerBound Lower bound.
          * @param upperBound Upper bound.
          * @param x Implementation specific argument, {@code null} always means that we need to return full detached data row.
          */
-        ForwardCursor(L lowerBound, L upperBound, Object x) {
+        AbstractForwardCursor(L lowerBound, L upperBound, Object x) {
             this.lowerBound = lowerBound;
             this.upperBound = upperBound;
             this.x = x;
         }
+
+        /**
+         *
+         */
+        abstract void init0();
+
+        /**
+         * @param pageAddr
+         * @param io
+         * @param startIdx
+         * @param cnt
+         * @return
+         * @throws IgniteCheckedException If failed.
+         */
+        abstract boolean fillFromBuffer0(long pageAddr, BPlusIO<L> io, int startIdx, int cnt) throws IgniteCheckedException;
+
+        /**
+         * @return
+         * @throws IgniteCheckedException If failed.
+         */
+        abstract boolean reinitialize0() throws IgniteCheckedException;
+
+        abstract void onNotFound(boolean readDone);
 
         /**
          * @param pageAddr Page address.
@@ -4437,9 +4470,10 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
          * @param startIdx Start index.
          * @throws IgniteCheckedException If failed.
          */
-        private void init(long pageAddr, BPlusIO<L> io, int startIdx) throws IgniteCheckedException {
+        final void init(long pageAddr, BPlusIO<L> io, int startIdx) throws IgniteCheckedException {
             nextPageId = 0;
-            row = -1;
+
+            init0();
 
             int cnt = io.getCount(pageAddr);
 
@@ -4447,16 +4481,10 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
             if (cnt == 0) {
                 assert io.getForward(pageAddr) == 0L;
 
-                rows = null;
+                onNotFound(true);
             }
-            else if (!fillFromBuffer(pageAddr, io, startIdx, cnt)) {
-                if (rows != EMPTY) {
-                    assert rows.length > 0; // Otherwise it makes no sense to create an array.
-
-                    // Fake clear.
-                    rows[0] = null;
-                }
-            }
+            else if (!fillFromBuffer(pageAddr, io, startIdx, cnt))
+                onNotFound(false);
         }
 
         /**
@@ -4466,7 +4494,7 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
          * @return Adjusted to lower bound start index.
          * @throws IgniteCheckedException If failed.
          */
-        private int findLowerBound(long pageAddr, BPlusIO<L> io, int cnt) throws IgniteCheckedException {
+        final int findLowerBound(long pageAddr, BPlusIO<L> io, int cnt) throws IgniteCheckedException {
             assert io.isLeaf();
 
             // Compare with the first row on the page.
@@ -4491,7 +4519,7 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
          * @return Corrected number of rows with respect to upper bound.
          * @throws IgniteCheckedException If failed.
          */
-        private int findUpperBound(long pageAddr, BPlusIO<L> io, int low, int cnt) throws IgniteCheckedException {
+        final int findUpperBound(long pageAddr, BPlusIO<L> io, int low, int cnt) throws IgniteCheckedException {
             assert io.isLeaf();
 
             // Compare with the last row on the page.
@@ -4530,68 +4558,13 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
 
             nextPageId = io.getForward(pageAddr);
 
-            if (lowerBound != null && startIdx == 0)
-                startIdx = findLowerBound(pageAddr, io, cnt);
-
-            if (upperBound != null && cnt != startIdx)
-                cnt = findUpperBound(pageAddr, io, startIdx, cnt);
-
-            cnt -= startIdx;
-
-            if (cnt == 0)
-                return false;
-
-            if (rows == EMPTY)
-                rows = (T[])new Object[cnt];
-
-            for (int i = 0; i < cnt; i++) {
-                T r = getRow(io, pageAddr, startIdx + i, x);
-
-                rows = GridArrays.set(rows, i, r);
-            }
-
-            GridArrays.clearTail(rows, cnt);
-
-            return true;
-        }
-
-        /** {@inheritDoc} */
-        @SuppressWarnings("SimplifiableIfStatement")
-        @Override public boolean next() throws IgniteCheckedException {
-            if (rows == null)
-                return false;
-
-            if (++row < rows.length && rows[row] != null) {
-                clearLastRow(); // Allow to GC the last returned row.
-
-                return true;
-            }
-
-            return nextPage();
-        }
-
-        /**
-         * @return Cleared last row.
-         */
-        private T clearLastRow() {
-            if (row == 0)
-                return null;
-
-            int last = row - 1;
-
-            T r = rows[last];
-
-            assert r != null;
-
-            rows[last] = null;
-
-            return r;
+            return fillFromBuffer0(pageAddr, io, startIdx, cnt);
         }
 
         /**
          * @throws IgniteCheckedException If failed.
          */
-        private void find() throws IgniteCheckedException {
+        final void find() throws IgniteCheckedException {
             assert lowerBound != null;
 
             doFind(new GetCursor(lowerBound, lowerShift, this));
@@ -4607,21 +4580,19 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
             // to the previous lower bound.
             find();
 
-            return next();
+            return reinitialize0();
         }
 
         /**
          * @return {@code true} If we have rows to return after reading the next page.
          * @throws IgniteCheckedException If failed.
          */
-        private boolean nextPage() throws IgniteCheckedException {
-            updateLowerBound(clearLastRow());
-
-            row = 0;
+        final boolean nextPage(T lastRow) throws IgniteCheckedException {
+            updateLowerBound(lastRow);
 
             for (;;) {
                 if (nextPageId == 0) {
-                    rows = null;
+                    onNotFound(true);
 
                     return false; // Done.
                 }
@@ -4664,6 +4635,211 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
                 lowerShift = 1; // Now we have the full row an need to avoid duplicates.
                 lowerBound = lower; // Move the lower bound forward for further concurrent merge retries.
             }
+        }
+    }
+
+    /**
+     * Forward cursor.
+     */
+    @SuppressWarnings("unchecked")
+    private final class FindOneCursor extends AbstractForwardCursor {
+        /** */
+        private Object resRow;
+
+        /** */
+        private T lastRow;
+
+        /** */
+        private final RowPredicate<L, T> p;
+
+        /**
+         * @param lowerBound Lower bound.
+         * @param upperBound Upper bound.
+         * @param x Implementation specific argument, {@code null} always means that we need to return full detached data row.
+         */
+        FindOneCursor(L lowerBound, L upperBound, RowPredicate<L, T> p, Object x) {
+            super(lowerBound, upperBound, x);
+
+            assert lowerBound != null;
+            assert upperBound != null;
+
+            this.p = p;
+        }
+
+        @Override void init0() {
+            // No-op.
+        }
+
+        @Override boolean fillFromBuffer0(long pageAddr, BPlusIO<L> io, int startIdx, int cnt) throws IgniteCheckedException {
+            if (startIdx == 0) // TODO IGNITE-3478: startIdx == 0? can search twice for first item?
+                startIdx = findLowerBound(pageAddr, io, cnt);
+
+            if (cnt == startIdx)
+                return false;
+
+            for (int i = startIdx; i < cnt; i++) {
+                int cmp = compare(0, io, pageAddr, i, upperBound);
+
+                if (cmp > 0) {
+                    nextPageId = 0; // The End.
+
+                    return false;
+                }
+
+                if (p == null || p.apply(BPlusTree.this, io, pageAddr, i)) {
+                    resRow = getRow(io, pageAddr, i, x);
+
+                    return true;
+                }
+            }
+
+            if (nextPageId != 0)
+                lastRow = getRow(io, pageAddr, cnt - 1, x); // Need save last row.
+
+            return true;
+        }
+
+        @Override boolean reinitialize0() throws IgniteCheckedException {
+            return true;
+        }
+
+        @Override void onNotFound(boolean readDone) {
+            resRow = EMPTY;
+        }
+
+        /**
+         * @throws IgniteCheckedException If failed.
+         * @return Found row.
+         */
+        private T findOne() throws IgniteCheckedException {
+            find();
+
+            if (resRow != null) {
+                if (resRow == EMPTY)
+                    return null;
+
+                return (T)resRow;
+            }
+
+            for (;;) {
+                T lastRow0 = lastRow;
+
+                lastRow = null;
+
+                nextPage(lastRow0);
+
+                if (resRow != null) {
+                    if (resRow == EMPTY)
+                        return null;
+
+                    return (T)resRow;
+                }
+            }
+        }
+    }
+
+    /**
+     * Forward cursor.
+     */
+    @SuppressWarnings("unchecked")
+    private final class ForwardCursor extends AbstractForwardCursor implements GridCursor<T> {
+        /** */
+        private T[] rows = (T[])EMPTY;
+
+        /** */
+        private int row = -1;
+
+        /**
+         * @param lowerBound Lower bound.
+         * @param upperBound Upper bound.
+         * @param x Implementation specific argument, {@code null} always means that we need to return full detached data row.
+         */
+        ForwardCursor(L lowerBound, L upperBound, Object x) {
+            super(lowerBound, upperBound, x);
+        }
+
+        @Override boolean fillFromBuffer0(long pageAddr, BPlusIO<L> io, int startIdx, int cnt) throws IgniteCheckedException {
+            if (lowerBound != null && startIdx == 0)
+                startIdx = findLowerBound(pageAddr, io, cnt);
+
+            if (upperBound != null && cnt != startIdx)
+                cnt = findUpperBound(pageAddr, io, startIdx, cnt);
+
+            cnt -= startIdx;
+
+            if (cnt == 0)
+                return false;
+
+            if (rows == EMPTY)
+                rows = (T[])new Object[cnt];
+
+            for (int i = 0; i < cnt; i++) {
+                T r = getRow(io, pageAddr, startIdx + i, x);
+
+                rows = GridArrays.set(rows, i, r);
+            }
+
+            GridArrays.clearTail(rows, cnt);
+
+            return true;
+        }
+
+        @Override boolean reinitialize0() throws IgniteCheckedException {
+            return next();
+        }
+
+        @Override void onNotFound(boolean readDone) {
+            if (readDone)
+                rows = null;
+            else {
+                if (rows != EMPTY) {
+                    assert rows.length > 0; // Otherwise it makes no sense to create an array.
+
+                    // Fake clear.
+                    rows[0] = null;
+                }
+            }
+        }
+
+        @Override void init0() {
+            row = -1;
+        }
+
+        /** {@inheritDoc} */
+        @SuppressWarnings("SimplifiableIfStatement")
+        @Override public boolean next() throws IgniteCheckedException {
+            if (rows == null)
+                return false;
+
+            if (++row < rows.length && rows[row] != null) {
+                clearLastRow(); // Allow to GC the last returned row.
+
+                return true;
+            }
+
+            T lastRow = clearLastRow();
+
+            row = 0;
+
+            return nextPage(lastRow);
+        }
+
+        /**
+         * @return Cleared last row.
+         */
+        private T clearLastRow() {
+            if (row == 0)
+                return null;
+
+            int last = row - 1;
+
+            T r = rows[last];
+
+            assert r != null;
+
+            rows[last] = null;
+
+            return r;
         }
 
         /** {@inheritDoc} */
