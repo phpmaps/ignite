@@ -2539,6 +2539,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
     }
 
     /**
+     * @param restartCrd If {@code true} dedicated coordinator node is restarted during test.
      * @param srvs Number of server nodes.
      * @param clients Number of client nodes.
      * @param cacheBackups Number of cache backups.
@@ -2685,6 +2686,45 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
             stop.set(true);
         }
     }
+    /**
+     * @throws IgniteCheckedException If failed.
+     */
+    public void testSize() throws Exception {
+        Ignite node = startGrid(0);
+
+        IgniteCache cache = node.createCache(cacheConfiguration(PARTITIONED, FULL_SYNC, 0, 1));
+
+        assertEquals(cache.size(), 0);
+
+        final int KEYS = 10;
+
+        for (int i = 0; i < KEYS; i++) {
+            final Integer key = i;
+
+            try (Transaction tx = node.transactions().txStart(PESSIMISTIC, REPEATABLE_READ)) {
+                cache.put(key, i);
+
+                tx.commit();
+            }
+
+            assertEquals(i + 1, cache.size());
+        }
+
+        for (int i = 0; i < KEYS; i++) {
+            final Integer key = i;
+
+            try (Transaction tx = node.transactions().txStart(PESSIMISTIC, REPEATABLE_READ)) {
+                cache.put(key, i);
+
+                tx.commit();
+            }
+
+            assertEquals(KEYS, cache.size());
+        }
+
+        // TODO IGNITE-3478: test removes.
+    }
+
 
     /**
      * @throws IgniteCheckedException If failed.

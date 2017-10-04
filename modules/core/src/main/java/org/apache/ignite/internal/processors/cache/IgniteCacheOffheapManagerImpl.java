@@ -55,7 +55,10 @@ import org.apache.ignite.internal.processors.cache.tree.CacheDataRowStore;
 import org.apache.ignite.internal.processors.cache.tree.CacheDataTree;
 import org.apache.ignite.internal.processors.cache.tree.DataRow;
 import org.apache.ignite.internal.processors.cache.tree.MvccDataRow;
+import org.apache.ignite.internal.processors.cache.tree.MvccKeyMaxVersionBound;
+import org.apache.ignite.internal.processors.cache.tree.MvccKeyMinVersionBound;
 import org.apache.ignite.internal.processors.cache.tree.MvccSearchRow;
+import org.apache.ignite.internal.processors.cache.tree.MvccUpdateRow;
 import org.apache.ignite.internal.processors.cache.tree.MvccVersionBasedSearchRow;
 import org.apache.ignite.internal.processors.cache.tree.PendingEntriesTree;
 import org.apache.ignite.internal.processors.cache.tree.PendingRow;
@@ -1361,83 +1364,141 @@ public class IgniteCacheOffheapManagerImpl implements IgniteCacheOffheapManager 
             try {
                 int cacheId = grp.storeCacheIdInDataPage() ? cctx.cacheId() : CU.UNDEFINED_CACHE_ID;
 
-                MvccDataRow dataRow = new MvccDataRow(
-                    key,
-                    val,
-                    ver,
-                    partId,
-                    cacheId,
-                    mvccVer.coordinatorVersion(),
-                    mvccVer.counter());
-
                 CacheObjectContext coCtx = cctx.cacheObjectContext();
 
                 // Make sure value bytes initialized.
                 key.valueBytes(coCtx);
                 val.valueBytes(coCtx);
 
-                rowStore.addRow(dataRow);
+                if (true) {
+                    MvccUpdateRow updateRow = new MvccUpdateRow(
+                        key,
+                        val,
+                        ver,
+                        mvccVer,
+                        partId,
+                        cacheId);
 
-                assert dataRow.link() != 0 : dataRow;
+                    rowStore.addRow(updateRow);
 
-                if (grp.sharedGroup() && dataRow.cacheId() == CU.UNDEFINED_CACHE_ID)
-                    dataRow.cacheId(cctx.cacheId());
+                    assert updateRow.link() != 0 : updateRow;
 
-                boolean old = dataTree.putx(dataRow);
+                    if (grp.sharedGroup() && updateRow.cacheId() == CU.UNDEFINED_CACHE_ID)
+                        updateRow.cacheId(cctx.cacheId());
 
-                assert !old;
+                    GridLongList waitTxs = null;
 
-                GridLongList waitTxs = null;
+                    if (mvccVer.initialLoad()) {
+                        boolean old = dataTree.putx(updateRow);
 
-                if (!mvccVer.initialLoad()) {
-                    MvccLongList activeTxs = mvccVer.activeTransactions();
+                        assert !old;
 
-                    // TODO IGNITE-3484: need special method.
-                    GridCursor<CacheDataRow> cur = dataTree.find(
-                        new MvccSearchRow(cacheId, key, mvccVer.coordinatorVersion(), mvccVer.counter() - 1),
-                        new MvccSearchRow(cacheId, key, 1, 1));
+                        incrementSize(cctx.cacheId());
+                    }
+                    else {
+                        dataTree.iterate(updateRow, new MvccKeyMinVersionBound(cacheId, key), updateRow);
 
-                    boolean first = true;
+                        boolean old = dataTree.putx(updateRow);
 
-                    boolean activeTx = false;
+                        assert !old;
 
-                    while (cur.next()) {
-                        CacheDataRow oldVal = cur.get();
+                        if (!updateRow.previousNotNull())
+                            incrementSize(cctx.cacheId());
 
-                        assert oldVal.link() != 0 : oldVal;
+                        waitTxs = updateRow.activeTransactions();
 
-                        if (activeTxs != null && oldVal.mvccCoordinatorVersion() == mvccVer.coordinatorVersion() &&
-                            activeTxs.contains(oldVal.mvccCounter())) {
-                            if (waitTxs == null)
-                                waitTxs = new GridLongList();
+                        List<CacheSearchRow> cleanupRows = updateRow.cleanupRows();
 
-                            assert oldVal.mvccCounter() != mvccVer.counter();
+                        if (cleanupRows != null) {
+                            for (int i = 0; i < cleanupRows.size(); i++) {
+                                CacheSearchRow oldRow = cleanupRows.get(i);
 
-                            waitTxs.add(oldVal.mvccCounter());
+                                assert oldRow.link() != 0L : oldRow;
 
-                            activeTx = true;
+                                boolean rmvd = dataTree.removex(oldRow);
+
+                                assert rmvd;
+
+                                rowStore.removeRow(oldRow.link());
+                            }
                         }
+                    }
 
-                        if (!activeTx) {
-                            // Should not delete oldest version which is less than cleanup version.
-                            int cmp = compare(oldVal, mvccVer.coordinatorVersion(), mvccVer.cleanupVersion());
+                    return waitTxs;
+                }
+                else {
+                    MvccDataRow dataRow = new MvccDataRow(
+                        key,
+                        val,
+                        ver,
+                        partId,
+                        cacheId,
+                        mvccVer.coordinatorVersion(),
+                        mvccVer.counter());
 
-                            if (cmp <= 0) {
-                                if (first)
-                                    first = false;
-                                else {
-                                    boolean rmvd = dataTree.removex(oldVal);
+                    rowStore.addRow(dataRow);
 
-                                    assert rmvd;
+                    assert dataRow.link() != 0 : dataRow;
 
-                                    rowStore.removeRow(oldVal.link());
+                    if (grp.sharedGroup() && dataRow.cacheId() == CU.UNDEFINED_CACHE_ID)
+                        dataRow.cacheId(cctx.cacheId());
+
+                    boolean old = dataTree.putx(dataRow);
+
+                    assert !old;
+
+                    GridLongList waitTxs = null;
+
+                    if (!mvccVer.initialLoad()) {
+                        MvccLongList activeTxs = mvccVer.activeTransactions();
+
+                        // TODO IGNITE-3484: need special method.
+                        GridCursor<CacheDataRow> cur = dataTree.find(
+                            new MvccSearchRow(cacheId, key, mvccVer.coordinatorVersion(), mvccVer.counter() - 1),
+                            new MvccSearchRow(cacheId, key, 1, 1));
+
+                        boolean first = true;
+
+                        boolean activeTx = false;
+
+                        while (cur.next()) {
+                            CacheDataRow oldVal = cur.get();
+
+                            assert oldVal.link() != 0 : oldVal;
+
+                            if (activeTxs != null && oldVal.mvccCoordinatorVersion() == mvccVer.coordinatorVersion() &&
+                                activeTxs.contains(oldVal.mvccCounter())) {
+                                if (waitTxs == null)
+                                    waitTxs = new GridLongList();
+
+                                assert oldVal.mvccCounter() != mvccVer.counter();
+
+                                waitTxs.add(oldVal.mvccCounter());
+
+                                activeTx = true;
+                            }
+
+                            if (!activeTx) {
+                                // Should not delete oldest version which is less than cleanup version.
+                                int cmp = compare(oldVal, mvccVer.coordinatorVersion(), mvccVer.cleanupVersion());
+
+                                if (cmp <= 0) {
+                                    if (first)
+                                        first = false;
+                                    else {
+                                        boolean rmvd = dataTree.removex(oldVal);
+
+                                        assert rmvd;
+
+                                        rowStore.removeRow(oldVal.link());
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                return waitTxs;
+                    return waitTxs;
+                }
             }
             finally {
                 busyLock.leaveBusy();
@@ -1649,11 +1710,15 @@ public class IgniteCacheOffheapManagerImpl implements IgniteCacheOffheapManager 
 
             if (grp.mvccEnabled()) {
                 if (true) {
-                    row = dataTree.findOneBounded(
-                        new MvccSearchRow(cacheId, key, Long.MAX_VALUE, Long.MAX_VALUE),
-                        new MvccSearchRow(cacheId, key, 1L, 1L),
-                        null,
-                        CacheDataRowAdapter.RowData.NO_KEY);
+                    MvccKeyMaxVersionBound searchRow = new MvccKeyMaxVersionBound(cacheId, key);
+
+                    dataTree.iterate(
+                        searchRow,
+                        new MvccKeyMinVersionBound(cacheId, key),
+                        searchRow // Use the same instance as closure to do not create extra object.
+                    );
+
+                    row = searchRow.row();
                 }
                 else {
                     GridCursor<CacheDataRow> cur = dataTree.find(new MvccSearchRow(cacheId, key, Long.MAX_VALUE, Long.MAX_VALUE),
@@ -1680,6 +1745,8 @@ public class IgniteCacheOffheapManagerImpl implements IgniteCacheOffheapManager 
             throws IgniteCheckedException
         {
             assert grp.mvccEnabled();
+
+            // Note: this method is intended for testing only.
 
             key.valueBytes(cctx.cacheObjectContext());
 
@@ -1717,11 +1784,13 @@ public class IgniteCacheOffheapManagerImpl implements IgniteCacheOffheapManager 
             if (true) {
                 MvccVersionBasedSearchRow lower = new MvccVersionBasedSearchRow(cacheId, key, ver);
 
-                CacheDataRow row = dataTree.findOneBounded(
+                dataTree.iterate(
                     lower,
-                    new MvccSearchRow(cacheId, key, 1L, 1L),
-                    lower, // Use the same instance as predicate to do not create extra object.
-                    CacheDataRowAdapter.RowData.NO_KEY);
+                    new MvccKeyMinVersionBound(cacheId, key),
+                    lower // Use the same instance as closure to do not create extra object.
+                );
+
+                CacheDataRow row = lower.row();
 
                 afterRowFound(row, key);
 

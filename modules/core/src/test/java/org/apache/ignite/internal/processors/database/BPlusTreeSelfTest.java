@@ -571,7 +571,7 @@ public class BPlusTreeSelfTest extends GridCommonAbstractTest {
             assertNoLocks();
 
             assertEquals(x, tree.findOne(x).longValue());
-            assertEquals(x, tree.findOneBounded(x, x, null, null).longValue());
+            checkIterate(tree, x, x, x, true);
 
             assertNoLocks();
 
@@ -588,13 +588,13 @@ public class BPlusTreeSelfTest extends GridCommonAbstractTest {
 
         for (long x = 0; x < cnt; x++) {
             assertEquals(x, tree.findOne(x).longValue());
-            assertEquals(x, tree.findOneBounded(x, x, null, null).longValue());
+            checkIterate(tree, x, x, x, true);
         }
 
         assertNoLocks();
 
         assertNull(tree.findOne(cnt));
-        assertNull(tree.findOneBounded(cnt, cnt, null, null));
+        checkIterate(tree, cnt, cnt, null, false);
 
         for (long x = RMV_INC > 0 ? 0 : cnt - 1; x >= 0 && x < cnt; x += RMV_INC) {
             X.println(" -- " + x);
@@ -608,7 +608,7 @@ public class BPlusTreeSelfTest extends GridCommonAbstractTest {
             assertNoLocks();
 
             assertNull(tree.findOne(x));
-            assertNull(tree.findOneBounded(x, x, null, null));
+            checkIterate(tree, x, x, null, false);
 
             assertNoLocks();
 
@@ -622,6 +622,32 @@ public class BPlusTreeSelfTest extends GridCommonAbstractTest {
         assertEquals(0, tree.rootLevel());
 
         assertNoLocks();
+    }
+
+    /**
+     * @param tree
+     * @param lower
+     * @param upper
+     * @param exp
+     * @param expFound
+     * @throws IgniteCheckedException
+     */
+    private void checkIterate(TestTree tree, long lower, long upper, Long exp, boolean expFound)
+        throws IgniteCheckedException {
+        TestTreeRowClosure c = new TestTreeRowClosure(exp);
+
+        tree.iterate(lower, upper, c);
+
+        assertEquals(expFound, c.found);
+    }
+
+    private void checkIterateC(TestTree tree, long lower, long upper, TestTreeRowClosure c, boolean expFound)
+        throws IgniteCheckedException {
+        c.found = false;
+
+        tree.iterate(lower, upper, c);
+
+        assertEquals(expFound, c.found);
     }
 
     /**
@@ -1250,44 +1276,53 @@ public class BPlusTreeSelfTest extends GridCommonAbstractTest {
     /**
      * @throws Exception If failed.
      */
-    public void testFindOneBounded() throws Exception {
+    public void testIterate() throws Exception {
         MAX_PER_PAGE = 5;
 
         TestTree tree = createTestTree(true);
 
-        assertNull(tree.findOneBounded(0L, 100L, null, null));
+        checkIterate(tree, 0L, 100L, null, false);
 
         for (long idx = 1L; idx <= 10L; ++idx)
             tree.put(idx);
 
         for (long idx = 1L; idx <= 10L; ++idx)
-            assertEquals(idx, (Object)tree.findOneBounded(idx, 100L, null, null));
+            checkIterate(tree, idx, 100L, idx, true);
 
-        assertEquals(1L, (Object)tree.findOneBounded(0L, 100L, null, null));
-
-        for (long idx = 1L; idx <= 10L; ++idx)
-            assertEquals(10L, (Object)tree.findOneBounded(idx, 100L, new TestRowPredicate(10L), null));
-
-        assertNull(tree.findOneBounded(0L, 100L, new TestRowPredicate(100L), null));
+        checkIterate(tree, 0L, 100L, 1L, true);
 
         for (long idx = 1L; idx <= 10L; ++idx)
-            assertEquals(idx, (Object)tree.findOneBounded(0L, 100L, new TestRowPredicate(idx), null));
+            checkIterate(tree, idx, 100L, 10L, true);
+
+        checkIterate(tree, 0L, 100L, 100L, false);
+
+        for (long idx = 1L; idx <= 10L; ++idx)
+            checkIterate(tree, 0L, 100L, idx, true);
 
         for (long idx = 0L; idx <= 10L; ++idx)
-            assertNull(tree.findOneBounded(idx, 11L, new TestRowPredicate(-1L), null));
+            checkIterate(tree, idx, 11L, -1L, false);
     }
 
     /**
      * @throws Exception If failed.
      */
-    public void testFindOneBoundedConcurrentPutRemove() throws Exception {
+    public void testIterateConcurrentPutRemove() throws Exception {
         findOneBoundedConcurrentPutRemove();
     }
 
     /**
      * @throws Exception If failed.
      */
-    public void testFindOneBoundedConcurrentPutRemove_5() throws Exception {
+    public void testIterateConcurrentPutRemove_1() throws Exception {
+        MAX_PER_PAGE = 1;
+
+        findOneBoundedConcurrentPutRemove();
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testIterateConcurrentPutRemove_5() throws Exception {
         MAX_PER_PAGE = 5;
 
         findOneBoundedConcurrentPutRemove();
@@ -1296,7 +1331,7 @@ public class BPlusTreeSelfTest extends GridCommonAbstractTest {
     /**
      * @throws Exception If failed.
      */
-    public void testFindOneBoundedConcurrentPutRemove_10() throws Exception {
+    public void testIteratePutRemove_10() throws Exception {
         MAX_PER_PAGE = 10;
 
         findOneBoundedConcurrentPutRemove();
@@ -1370,33 +1405,30 @@ public class BPlusTreeSelfTest extends GridCommonAbstractTest {
             info("Iteration [iter=" + i + ", key=" + findKey + ']');
 
             assertEquals(findKey, tree.findOne(findKey));
-            assertEquals(findKey, tree.findOneBounded(findKey, findKey, null, null));
+            checkIterate(tree, findKey, findKey, findKey, true);
 
             IgniteInternalFuture getFut = GridTestUtils.runMultiThreadedAsync(new Callable<Void>() {
                 @Override public Void call() throws Exception {
                     ThreadLocalRandom rnd = ThreadLocalRandom.current();
 
-                    TestRowPredicate p = new TestRowPredicate(findKey);
+                    TestTreeRowClosure p = new TestTreeRowClosure(findKey);
 
-                    TestRowPredicate falseP = new TestRowPredicate(-1L);
+                    TestTreeRowClosure falseP = new TestTreeRowClosure(-1L);
 
                     int cnt = 0;
 
                     while (!stop.get()) {
                         int shift = MAX_PER_PAGE > 0 ? rnd.nextInt(MAX_PER_PAGE * 2) : rnd.nextInt(100);
 
-                        assertEquals(findKey, tree.findOneBounded(findKey, findKey, null, null));
+                        checkIterateC(tree, findKey, findKey, p, true);
 
-                        assertEquals(findKey,
-                            tree.findOneBounded(findKey - shift, findKey, p, null));
+                        checkIterateC(tree, findKey - shift, findKey, p, true);
 
-                        assertEquals(findKey,
-                            tree.findOneBounded(findKey - shift, findKey + shift, p, null));
+                        checkIterateC(tree, findKey - shift, findKey + shift, p, true);
 
-                        assertEquals(findKey,
-                            tree.findOneBounded(findKey, findKey + shift, p, null));
+                        checkIterateC(tree, findKey, findKey + shift, p, true);
 
-                        assertNull(tree.findOneBounded(-100L, KEYS + 100L, falseP, null));
+                        checkIterateC(tree, -100L, KEYS + 100L, falseP, false);
 
                         cnt++;
                     }
@@ -1650,7 +1682,11 @@ public class BPlusTreeSelfTest extends GridCommonAbstractTest {
                         last = c.get();
                     }
 
-                    last = tree.findOneBounded((long)low, (long)high, null, null);
+                    TestTreeFindFirstClosure cl = new TestTreeFindFirstClosure();
+
+                    tree.iterate((long)low, (long)high, cl);
+
+                    last = cl.val;
 
                     if (last != null) {
                         assertTrue(low + " <= " + last + " <= " + high, last >= low);
@@ -2064,23 +2100,46 @@ public class BPlusTreeSelfTest extends GridCommonAbstractTest {
     /**
      *
      */
-    static class TestRowPredicate implements TestTree.RowPredicate<Long, Long> {
+    static class TestTreeRowClosure implements BPlusTree.TreeRowClosure<Long, Long> {
         /** */
         private final Long expVal;
 
+        /** */
+        private boolean found;
+
         /**
-         * @param expVal Expected value.
+         * @param expVal Value to find or {@code null} to find first.
          */
-        TestRowPredicate(Long expVal) {
+        TestTreeRowClosure(Long expVal) {
             this.expVal = expVal;
         }
 
         /** {@inheritDoc} */
         @Override public boolean apply(BPlusTree<Long, Long> tree, BPlusIO<Long> io, long pageAddr, int idx)
             throws IgniteCheckedException {
-            Long row = io.getLookupRow(tree, pageAddr, idx);
+            assert !found;
 
-            return row.equals(expVal);
+            found = expVal == null || io.getLookupRow(tree, pageAddr, idx).equals(expVal);
+
+            return !found;
+        }
+    }
+
+    /**
+     *
+     */
+    static class TestTreeFindFirstClosure implements BPlusTree.TreeRowClosure<Long, Long> {
+        /** */
+        private Long val;
+
+        /** {@inheritDoc} */
+        @Override public boolean apply(BPlusTree<Long, Long> tree, BPlusIO<Long> io, long pageAddr, int idx)
+            throws IgniteCheckedException {
+            assert val == null;
+
+            val = io.getLookupRow(tree, pageAddr, idx);
+
+            return false;
         }
     }
 }

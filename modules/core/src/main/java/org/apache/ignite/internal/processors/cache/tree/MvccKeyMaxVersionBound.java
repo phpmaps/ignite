@@ -11,7 +11,7 @@
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  See the License for the specific language governing permissions and
+ * See the License for the specific language governing permissions and
  * limitations under the License.
  */
 
@@ -19,7 +19,6 @@ package org.apache.ignite.internal.processors.cache.tree;
 
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.internal.processors.cache.KeyCacheObject;
-import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorVersion;
 import org.apache.ignite.internal.processors.cache.persistence.CacheDataRow;
 import org.apache.ignite.internal.processors.cache.persistence.CacheDataRowAdapter;
 import org.apache.ignite.internal.processors.cache.persistence.CacheSearchRow;
@@ -31,24 +30,16 @@ import org.jetbrains.annotations.Nullable;
 /**
  *
  */
-public class MvccVersionBasedSearchRow extends SearchRow implements BPlusTree.TreeRowClosure<CacheSearchRow, CacheDataRow> {
-    /** */
-    private final MvccCoordinatorVersion ver;
-
+public class MvccKeyMaxVersionBound extends SearchRow implements BPlusTree.TreeRowClosure<CacheSearchRow, CacheDataRow> {
     /** */
     private CacheDataRow resRow;
 
     /**
      * @param cacheId Cache ID.
      * @param key Key.
-     * @param ver Mvcc version.
      */
-    public MvccVersionBasedSearchRow(int cacheId, KeyCacheObject key, MvccCoordinatorVersion ver) {
+    public MvccKeyMaxVersionBound(int cacheId, KeyCacheObject key) {
         super(cacheId, key);
-
-        assert ver != null;
-
-        this.ver = ver;
     }
 
     /**
@@ -59,42 +50,28 @@ public class MvccVersionBasedSearchRow extends SearchRow implements BPlusTree.Tr
     }
 
     /** {@inheritDoc} */
-    @Override public boolean apply(BPlusTree<CacheSearchRow, CacheDataRow> tree,
-        BPlusIO<CacheSearchRow> io,
+    @Override public boolean apply(BPlusTree<CacheSearchRow, CacheDataRow> tree, BPlusIO<CacheSearchRow> io,
         long pageAddr,
-        int idx) throws IgniteCheckedException
+        int idx)
+        throws IgniteCheckedException
     {
-        boolean visible = true;
+        resRow = ((CacheDataTree)tree).getRow(io, pageAddr, idx, CacheDataRowAdapter.RowData.NO_KEY);
 
-        if (ver.activeTransactions().size() > 0) {
-            RowLinkIO rowIo = (RowLinkIO)io;
-
-            // TODO IGNITE-3478 sort active transactions?
-            if (rowIo.getMvccCoordinatorVersion(pageAddr, idx) == ver.coordinatorVersion())
-                visible = !ver.activeTransactions().contains(rowIo.getMvccCounter(pageAddr, idx));
-        }
-
-        if (visible) {
-            resRow = ((CacheDataTree) tree).getRow(io, pageAddr, idx, CacheDataRowAdapter.RowData.NO_KEY);
-
-            return false; // Stop search.
-        }
-
-        return true;
+        return false;  // Stop search.
     }
 
     /** {@inheritDoc} */
     @Override public long mvccCoordinatorVersion() {
-        return ver.coordinatorVersion();
+        return Long.MAX_VALUE;
     }
 
     /** {@inheritDoc} */
     @Override public long mvccCounter() {
-        return ver.counter();
+        return Long.MAX_VALUE;
     }
 
     /** {@inheritDoc} */
     @Override public String toString() {
-        return S.toString(MvccVersionBasedSearchRow.class, this);
+        return S.toString(MvccKeyMaxVersionBound.class, this);
     }
 }
