@@ -973,6 +973,35 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
         }
     }
 
+    /**
+     * @param lower Lower bound inclusive.
+     * @param upper Upper bound inclusive.
+     * @param x Implementation specific argument, {@code null} always means that we need to return full detached data row.
+     * @return First found item which meets bounds and pass predicate.
+     * @throws IgniteCheckedException If failed.
+     */
+    public T findOneBounded(L lower, L upper, RowPredicate<L, T> p, Object x) throws IgniteCheckedException {
+        checkDestroyed();
+
+        try {
+            FindOneCursor cursor = new FindOneCursor(lower, upper, p, x);
+
+            return cursor.findOne();
+        }
+        catch (IgniteCheckedException e) {
+            throw new IgniteCheckedException("Runtime failure on bounds: [lower=" + lower + ", upper=" + upper + "]", e);
+        }
+        catch (RuntimeException e) {
+            throw new IgniteException("Runtime failure on bounds: [lower=" + lower + ", upper=" + upper + "]", e);
+        }
+        catch (AssertionError e) {
+            throw new AssertionError("Assertion error on bounds: [lower=" + lower + ", upper=" + upper + "]", e);
+        }
+        finally {
+            checkDestroyed();
+        }
+    }
+
     /** {@inheritDoc} */
     @Override public T findFirst() throws IgniteCheckedException {
         checkDestroyed();
@@ -4385,32 +4414,6 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
      */
     protected abstract T getRow(BPlusIO<L> io, long pageAddr, int idx, Object x) throws IgniteCheckedException;
 
-    public interface RowPredicate<L, T extends L> {
-        public boolean apply(BPlusTree<L, T> tree, BPlusIO<L> io, long pageAddr, int idx) throws IgniteCheckedException;
-    }
-
-    public T findOneBounded(L lower, L upper, RowPredicate<L, T> p, Object x) throws IgniteCheckedException {
-        checkDestroyed();
-
-        try {
-            FindOneCursor cursor = new FindOneCursor(lower, upper, p, x);
-
-            return cursor.findOne();
-        }
-        catch (IgniteCheckedException e) {
-            throw new IgniteCheckedException("Runtime failure on bounds: [lower=" + lower + ", upper=" + upper + "]", e);
-        }
-        catch (RuntimeException e) {
-            throw new IgniteException("Runtime failure on bounds: [lower=" + lower + ", upper=" + upper + "]", e);
-        }
-        catch (AssertionError e) {
-            throw new AssertionError("Assertion error on bounds: [lower=" + lower + ", upper=" + upper + "]", e);
-        }
-        finally {
-            checkDestroyed();
-        }
-    }
-
     /**
      *
      */
@@ -4995,5 +4998,12 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
 
         /** */
         DONE
+    }
+
+    /**
+     *
+     */
+    public interface RowPredicate<L, T extends L> {
+        public boolean apply(BPlusTree<L, T> tree, BPlusIO<L> io, long pageAddr, int idx) throws IgniteCheckedException;
     }
 }
