@@ -62,6 +62,7 @@ import org.apache.ignite.internal.util.typedef.internal.S;
 import org.apache.ignite.internal.util.typedef.internal.SB;
 import org.apache.ignite.internal.util.typedef.internal.U;
 import org.apache.ignite.lang.IgniteInClosure;
+import org.jetbrains.annotations.Nullable;
 
 import static org.apache.ignite.internal.processors.cache.persistence.tree.BPlusTree.Bool.DONE;
 import static org.apache.ignite.internal.processors.cache.persistence.tree.BPlusTree.Bool.FALSE;
@@ -4447,21 +4448,25 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
         abstract void init0();
 
         /**
-         * @param pageAddr
-         * @param io
-         * @param startIdx
-         * @param cnt
-         * @return
+         * @param pageAddr Page address.
+         * @param io IO.
+         * @param startIdx Start index.
+         * @param cnt Number of rows in the buffer.
+         * @return {@code true} If we were able to fetch rows from this page.
          * @throws IgniteCheckedException If failed.
          */
-        abstract boolean fillFromBuffer0(long pageAddr, BPlusIO<L> io, int startIdx, int cnt) throws IgniteCheckedException;
+        abstract boolean fillFromBuffer0(long pageAddr, BPlusIO<L> io, int startIdx, int cnt)
+            throws IgniteCheckedException;
 
         /**
-         * @return
+         * @return {@code True} If we have rows to return after reading the next page.
          * @throws IgniteCheckedException If failed.
          */
         abstract boolean reinitialize0() throws IgniteCheckedException;
 
+        /**
+         * @param readDone {@code True} if traversed all rows.
+         */
         abstract void onNotFound(boolean readDone);
 
         /**
@@ -4584,6 +4589,7 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
         }
 
         /**
+         * @param lastRow Last read row (to be used as new lower bound).
          * @return {@code true} If we have rows to return after reading the next page.
          * @throws IgniteCheckedException If failed.
          */
@@ -4655,9 +4661,10 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
         /**
          * @param lowerBound Lower bound.
          * @param upperBound Upper bound.
+         * @param p Row predicate.
          * @param x Implementation specific argument, {@code null} always means that we need to return full detached data row.
          */
-        FindOneCursor(L lowerBound, L upperBound, RowPredicate<L, T> p, Object x) {
+        FindOneCursor(L lowerBound, L upperBound, @Nullable RowPredicate<L, T> p, Object x) {
             super(lowerBound, upperBound, x);
 
             assert lowerBound != null;
@@ -4666,10 +4673,12 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
             this.p = p;
         }
 
+        /** {@inheritDoc} */
         @Override void init0() {
             // No-op.
         }
 
+        /** {@inheritDoc} */
         @Override boolean fillFromBuffer0(long pageAddr, BPlusIO<L> io, int startIdx, int cnt) throws IgniteCheckedException {
             if (startIdx == 0) // TODO IGNITE-3478: startIdx == 0? can search twice for first item?
                 startIdx = findLowerBound(pageAddr, io, cnt);
@@ -4699,10 +4708,12 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
             return true;
         }
 
+        /** {@inheritDoc} */
         @Override boolean reinitialize0() throws IgniteCheckedException {
             return true;
         }
 
+        /** {@inheritDoc} */
         @Override void onNotFound(boolean readDone) {
             resRow = EMPTY;
         }
@@ -4758,6 +4769,7 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
             super(lowerBound, upperBound, x);
         }
 
+        /** {@inheritDoc} */
         @Override boolean fillFromBuffer0(long pageAddr, BPlusIO<L> io, int startIdx, int cnt) throws IgniteCheckedException {
             if (lowerBound != null && startIdx == 0)
                 startIdx = findLowerBound(pageAddr, io, cnt);
@@ -4784,10 +4796,12 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
             return true;
         }
 
+        /** {@inheritDoc} */
         @Override boolean reinitialize0() throws IgniteCheckedException {
             return next();
         }
 
+        /** {@inheritDoc} */
         @Override void onNotFound(boolean readDone) {
             if (readDone)
                 rows = null;
@@ -4801,6 +4815,7 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
             }
         }
 
+        /** {@inheritDoc} */
         @Override void init0() {
             row = -1;
         }
