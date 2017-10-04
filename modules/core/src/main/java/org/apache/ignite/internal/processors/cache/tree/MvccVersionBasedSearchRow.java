@@ -57,10 +57,10 @@ public class MvccVersionBasedSearchRow extends SearchRow implements BPlusTree.Ro
 
         RowLinkIO rowIo = (RowLinkIO)io;
 
-        if (rowIo.getMvccUpdateTopologyVersion(pageAddr, idx) != ver.coordinatorVersion())
+        if (rowIo.getMvccCoordinatorVersion(pageAddr, idx) != ver.coordinatorVersion())
             return true;
 
-        return !ver.activeTransactions().contains(ver.counter()); // TODO IGNITE-3478 sort active transactions?
+        return !ver.activeTransactions().contains(rowIo.getMvccCounter(pageAddr, idx)); // TODO IGNITE-3478 sort active transactions?
     }
 
     /** {@inheritDoc} */

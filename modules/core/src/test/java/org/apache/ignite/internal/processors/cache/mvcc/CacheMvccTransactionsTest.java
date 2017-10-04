@@ -2704,60 +2704,90 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
 
         fut.get();
 
-        final Integer key = 0;
+        final int KEYS = 1000;
 
         for (int i = 0; i < 10; i++) {
-            try (Transaction tx = node.transactions().txStart(PESSIMISTIC, REPEATABLE_READ)) {
-                cache.put(key + 1, i);
+            for (int k = 0; k < KEYS; k++) {
+                final Integer key = k;
 
-                tx.commit();
+                try (Transaction tx = node.transactions().txStart(PESSIMISTIC, REPEATABLE_READ)) {
+                    cache.put(key, i);
+
+                    tx.commit();
+                }
             }
         }
 
-        for (int i = 0; i < 10; i++) {
-            try (Transaction tx = node.transactions().txStart(PESSIMISTIC, REPEATABLE_READ)) {
-                cache.put(key, i);
+        for (int k = 0; k < KEYS; k++) {
+            final Integer key = k;
 
-                tx.commit();
+            KeyCacheObject key0 = cctx.toCacheKeyObject(key);
+
+            List<T2<Object, MvccCounter>> vers = cctx.offheap().mvccAllVersions(cctx, key0);
+
+            assertEquals(10, vers.size());
+
+            CacheDataRow row = cctx.offheap().read(cctx, key0);
+
+            checkRow(cctx, row, key0, vers.get(0).get1());
+
+            for (T2<Object, MvccCounter> ver : vers) {
+                MvccCounter cntr = ver.get2();
+
+                MvccCoordinatorVersion readVer =
+                    new MvccCoordinatorVersionResponse(cntr.coordinatorVersion(), cntr.counter(), 0);
+
+                row = cctx.offheap().mvccRead(cctx, key0, readVer);
+
+                checkRow(cctx, row, key0, ver.get1());
+            }
+
+            checkRow(cctx,
+                cctx.offheap().mvccRead(cctx, key0, version(vers.get(0).get2().coordinatorVersion() + 1, 1)),
+                key0,
+                vers.get(0).get1());
+
+            checkRow(cctx,
+                cctx.offheap().mvccRead(cctx, key0, version(vers.get(0).get2().coordinatorVersion(), vers.get(0).get2().counter() + 1)),
+                key0,
+                vers.get(0).get1());
+
+            MvccCoordinatorVersionResponse ver = version(crd.currentCoordinator().coordinatorVersion(), 100000);
+
+            for (int v = 0; v < vers.size(); v++) {
+                MvccCounter cntr = vers.get(v).get2();
+
+                ver.addTx(cntr.counter());
+
+                row = cctx.offheap().mvccRead(cctx, key0, ver);
+
+                if (v == vers.size() - 1)
+                    assertNull(row);
+                else
+                    checkRow(cctx, row, key0, vers.get(v + 1).get1());
             }
         }
-
-        KeyCacheObject key0 = cctx.toCacheKeyObject(key);
-
-        List<T2<Object, MvccCounter>> vers = cctx.offheap().mvccAllVersions(cctx, key0);
-
-        assertEquals(10, vers.size());
-
-        CacheDataRow row = cctx.offheap().read(cctx, key0);
-
-        checkRow(cctx, row, key0, vers.get(0).get1());
-
-        for (T2<Object, MvccCounter> ver : vers) {
-            MvccCounter cntr = ver.get2();
-
-            MvccCoordinatorVersion readVer =
-                new MvccCoordinatorVersionResponse(cntr.coordinatorVersion(), cntr.counter(), 0);
-
-            row = cctx.offheap().mvccRead(cctx, key0, readVer);
-
-            checkRow(cctx, row, key0, ver.get1());
-        }
-
-        checkRow(cctx,
-            cctx.offheap().mvccRead(cctx, key0, new MvccCoordinatorVersionResponse(vers.get(0).get2().coordinatorVersion() + 1, 1, 0)),
-            key0,
-            vers.get(0).get1());
-
-        checkRow(cctx,
-            cctx.offheap().mvccRead(cctx, key0, new MvccCoordinatorVersionResponse(vers.get(0).get2().coordinatorVersion(), vers.get(0).get2().counter() + 1, 0)),
-            key0,
-            vers.get(0).get1());
     }
 
+    /**
+     * @param cctx Context.
+     * @param row Row.
+     * @param expKey Expected row key.
+     * @param expVal Expected row value.
+     */
     private void checkRow(GridCacheContext cctx, CacheDataRow row, KeyCacheObject expKey, Object expVal) {
         assertNotNull(row);
         assertEquals(expKey, row.key());
         assertEquals(expVal, row.value().value(cctx.cacheObjectContext(), false));
+    }
+
+    /**
+     * @param crdVer Coordinator version.
+     * @param cntr Counter.
+     * @return Version.
+     */
+    private MvccCoordinatorVersionResponse version(long crdVer, long cntr) {
+        return new MvccCoordinatorVersionResponse(crdVer, cntr, 0);
     }
 
     /**

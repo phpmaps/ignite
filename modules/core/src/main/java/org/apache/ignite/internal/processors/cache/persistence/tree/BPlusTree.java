@@ -4694,7 +4694,7 @@ public abstract class BPlusTree<L, T extends L> extends DataStructure implements
             }
 
             if (nextPageId != 0)
-                lastRow = getRow(io, pageAddr, cnt - 1, x); // Need save last row.
+                lastRow = getRow(io, pageAddr, cnt - 1, null); // Need save last row.
 
             return true;
         }

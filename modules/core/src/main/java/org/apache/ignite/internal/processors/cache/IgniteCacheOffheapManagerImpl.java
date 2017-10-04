@@ -1648,7 +1648,7 @@ public class IgniteCacheOffheapManagerImpl implements IgniteCacheOffheapManager 
             CacheDataRow row;
 
             if (grp.mvccEnabled()) {
-                if (false) {
+                if (true) {
                     row = dataTree.findOneBounded(
                         new MvccSearchRow(cacheId, key, Long.MAX_VALUE, Long.MAX_VALUE),
                         new MvccSearchRow(cacheId, key, 1L, 1L),
@@ -1714,7 +1714,7 @@ public class IgniteCacheOffheapManagerImpl implements IgniteCacheOffheapManager 
 
             int cacheId = grp.sharedGroup() ? cctx.cacheId() : CU.UNDEFINED_CACHE_ID;
 
-            if (false) {
+            if (true) {
                 MvccVersionBasedSearchRow lower = new MvccVersionBasedSearchRow(cacheId, key, ver);
 
                 CacheDataRow row = dataTree.findOneBounded(
