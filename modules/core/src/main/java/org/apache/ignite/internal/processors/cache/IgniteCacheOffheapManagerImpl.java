@@ -380,14 +380,30 @@ public class IgniteCacheOffheapManagerImpl implements IgniteCacheOffheapManager 
     }
 
     /** {@inheritDoc} */
-    @Override public GridLongList mvccUpdate(GridCacheMapEntry entry,
+    @Override public GridLongList mvccUpdate(
+        boolean primary,
+        GridCacheMapEntry entry,
         CacheObject val,
         GridCacheVersion ver,
         MvccCoordinatorVersion mvccVer) throws IgniteCheckedException {
         return dataStore(entry.localPartition()).mvccUpdate(entry.context(),
+            primary,
             entry.key(),
             val,
             ver,
+            mvccVer);
+    }
+
+    /** {@inheritDoc} */
+    @Override public GridLongList mvccRemove(
+        boolean primary,
+        GridCacheMapEntry entry,
+        MvccCoordinatorVersion mvccVer
+    )
+        throws IgniteCheckedException {
+        return dataStore(entry.localPartition()).mvccRemove(entry.context(),
+            primary,
+            entry.key(),
             mvccVer);
     }
 
@@ -1350,8 +1366,29 @@ public class IgniteCacheOffheapManagerImpl implements IgniteCacheOffheapManager 
         }
 
         /** {@inheritDoc} */
+        @Override public GridLongList mvccRemove(GridCacheContext cctx,
+            boolean primary,
+            KeyCacheObject key,
+            MvccCoordinatorVersion mvccVer) throws IgniteCheckedException {
+            assert mvccVer != null;
+
+            if (!busyLock.enterBusy())
+                throw new NodeStoppingException("Operation has been cancelled (node is stopping).");
+
+            try {
+
+
+                return null;
+            }
+            finally {
+                busyLock.leaveBusy();
+            }
+        }
+
+        /** {@inheritDoc} */
         @Override public GridLongList mvccUpdate(
             GridCacheContext cctx,
+            boolean primary,
             KeyCacheObject key,
             CacheObject val,
             GridCacheVersion ver,

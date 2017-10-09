@@ -92,6 +92,29 @@ public class MvccUpdateRow extends DataRow implements BPlusTree.TreeRowClosure<C
         return cleanupRows;
     }
 
+    /**
+     * @param io IO.
+     * @param pageAddr Page address.
+     * @param idx Item index.
+     * @return Always {@code true}.
+     */
+    private boolean assertVersionGreater(RowLinkIO io, long pageAddr, int idx) {
+        long rowCrdVer = io.getMvccCoordinatorVersion(pageAddr, idx);
+        long rowCntr = io.getMvccCounter(pageAddr, idx);
+
+        int cmp = Long.compare(mvccCoordinatorVersion(), rowCrdVer);
+
+        if (cmp == 0)
+            cmp = Long.compare(mvccCounter(), rowCntr);
+
+        assert cmp > 0 : "[updCrd=" + mvccCoordinatorVersion() +
+            ", updCntr=" + mvccCounter() +
+            ", rowCrd=" + rowCrdVer +
+            ", rowCntr=" + rowCntr + ']';
+
+        return true;
+    }
+
     /** {@inheritDoc} */
     @Override public boolean apply(BPlusTree<CacheSearchRow, CacheDataRow> tree,
         BPlusIO<CacheSearchRow> io,
@@ -101,9 +124,8 @@ public class MvccUpdateRow extends DataRow implements BPlusTree.TreeRowClosure<C
     {
         RowLinkIO rowIo = (RowLinkIO)io;
 
-        // All previous version should be less then new one.
-        assert mvccVer.coordinatorVersion() >= rowIo.getMvccCoordinatorVersion(pageAddr, idx);
-        assert mvccVer.coordinatorVersion() > rowIo.getMvccCoordinatorVersion(pageAddr, idx) || mvccVer.counter() > rowIo.getMvccCounter(pageAddr, idx);
+        // All previous versions should be less then new one.
+        assert assertVersionGreater(rowIo, pageAddr, idx);
 
         boolean checkActive = mvccVer.activeTransactions().size() > 0;
 

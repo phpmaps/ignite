@@ -196,10 +196,19 @@ public interface IgniteCacheOffheapManager {
      * @return Transactions to wait for before finishing current transaction.
      * @throws IgniteCheckedException If failed.
      */
-    @Nullable public GridLongList mvccUpdate(GridCacheMapEntry entry,
+    @Nullable public GridLongList mvccUpdate(
+        boolean primary,
+        GridCacheMapEntry entry,
         CacheObject val,
         GridCacheVersion ver,
-        MvccCoordinatorVersion mvccVer) throws IgniteCheckedException;
+        MvccCoordinatorVersion mvccVer
+    ) throws IgniteCheckedException;
+
+    @Nullable public GridLongList mvccRemove(
+        boolean primary,
+        GridCacheMapEntry entry,
+        MvccCoordinatorVersion mvccVer
+    ) throws IgniteCheckedException;
 
     /**
      * @param cctx Cache context.
@@ -503,9 +512,16 @@ public interface IgniteCacheOffheapManager {
          */
         @Nullable GridLongList mvccUpdate(
             GridCacheContext cctx,
+            boolean primary,
             KeyCacheObject key,
             CacheObject val,
             GridCacheVersion ver,
+            MvccCoordinatorVersion mvccVer) throws IgniteCheckedException;
+
+        @Nullable GridLongList mvccRemove(
+            GridCacheContext cctx,
+            boolean primary,
+            KeyCacheObject key,
             MvccCoordinatorVersion mvccVer) throws IgniteCheckedException;
 
         /**
