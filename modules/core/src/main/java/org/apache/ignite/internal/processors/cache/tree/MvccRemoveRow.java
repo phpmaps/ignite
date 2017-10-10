@@ -18,9 +18,11 @@
 package org.apache.ignite.internal.processors.cache.tree;
 
 import org.apache.ignite.internal.processors.cache.KeyCacheObject;
-import org.apache.ignite.internal.processors.cache.mvcc.CacheCoordinatorsProcessor;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorVersion;
 import org.apache.ignite.internal.util.typedef.internal.S;
+
+import static org.apache.ignite.internal.processors.cache.mvcc.CacheCoordinatorsProcessor.createVersionForRemovedValue;
+import static org.apache.ignite.internal.processors.cache.mvcc.CacheCoordinatorsProcessor.unmaskCoordinatorVersion;
 
 /**
  *
@@ -42,7 +44,12 @@ public class MvccRemoveRow extends MvccUpdateRow {
 
     /** {@inheritDoc} */
     @Override public long mvccCoordinatorVersion() {
-        return CacheCoordinatorsProcessor.createVersionForRemovedValue(super.mvccCoordinatorVersion());
+        return createVersionForRemovedValue(super.mvccCoordinatorVersion());
+    }
+
+    /** {@inheritDoc} */
+    @Override protected long unmaskedCoordinatorVersion() {
+        return unmaskCoordinatorVersion(super.mvccCoordinatorVersion());
     }
 
     /** {@inheritDoc} */

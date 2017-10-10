@@ -1786,13 +1786,33 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
 
         final IgniteCache<Object, Object> cache = node.createCache(cacheConfiguration(PARTITIONED, FULL_SYNC, 1, 64));
 
-        final int KEYS = 100;
+        try (Transaction tx = txs.txStart(PESSIMISTIC, REPEATABLE_READ)) {
+            for (int k = 0; k < 100; k++)
+                cache.remove(k);
 
-        checkValues(new HashMap<>(), cache);
+            tx.commit();
+        }
+
+        Map<Object, Object> expVals = new HashMap<>();
 
         try (Transaction tx = txs.txStart(PESSIMISTIC, REPEATABLE_READ)) {
-            for (int k = 0; k < KEYS; k++)
-                cache.remove(k);
+            for (int k = 100; k < 200; k++) {
+                cache.put(k, k);
+
+                expVals.put(k, k);
+            }
+
+            tx.commit();
+        }
+
+        try (Transaction tx = txs.txStart(PESSIMISTIC, REPEATABLE_READ)) {
+            for (int k = 100; k < 200; k++) {
+                if (k % 2 == 0) {
+                    cache.remove(k);
+
+                    expVals.remove(k);
+                }
+            }
 
             tx.commit();
         }
@@ -1800,6 +1820,12 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
         startGrid(1);
 
         awaitPartitionMapExchange();
+
+        checkValues(expVals, jcache(1));
+
+        stopGrid(0);
+
+        checkValues(expVals, jcache(1));
     }
 
     /**

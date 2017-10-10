@@ -2581,6 +2581,7 @@ public abstract class GridCacheMapEntry extends GridMetadataAwareAdapter impleme
 
             boolean walEnabled = !cctx.isNear() && cctx.shared().wal() != null;
 
+            // TODO IGNITE-3478: move checks in special initialValue method.
             if (cctx.shared().database().persistenceEnabled()) {
                 unswap(false);
 
@@ -2603,14 +2604,19 @@ public abstract class GridCacheMapEntry extends GridMetadataAwareAdapter impleme
 
                 val = cctx.kernalContext().cacheObjects().prepareForCache(val, cctx);
 
-                if (val != null) {
-                    if (cctx.mvccEnabled())
-                        cctx.offheap().mvccUpdate(false, this, val, ver, mvccVer);
-                    else
-                        storeValue(val, expTime, ver, null);
-                }
+                if (cctx.mvccEnabled()) {
+                    cctx.offheap().mvccInitialValue(this, val, ver, mvccVer);
 
-                update(val, expTime, ttl, ver, true);
+                    if (val != null)
+                        update(val, expTime, ttl, ver, true);
+                }
+                else {
+                    if (val != null) {
+                        storeValue(val, expTime, ver, null);
+
+                        update(val, expTime, ttl, ver, true);
+                    }
+                }
 
                 boolean skipQryNtf = false;
 

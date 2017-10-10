@@ -383,6 +383,20 @@ public class IgniteCacheOffheapManagerImpl implements IgniteCacheOffheapManager 
     }
 
     /** {@inheritDoc} */
+    @Override public boolean mvccInitialValue(
+        GridCacheMapEntry entry,
+        CacheObject val,
+        GridCacheVersion ver,
+        MvccCoordinatorVersion mvccVer) throws IgniteCheckedException {
+        return dataStore(entry.localPartition()).mvccInitialValue(
+            entry.context(),
+            entry.key(),
+            val,
+            ver,
+            mvccVer);
+    }
+
+    /** {@inheritDoc} */
     @Override public GridLongList mvccUpdate(
         boolean primary,
         GridCacheMapEntry entry,
@@ -1360,6 +1374,130 @@ public class IgniteCacheOffheapManagerImpl implements IgniteCacheOffheapManager 
         }
 
         /** {@inheritDoc} */
+        @Override public boolean mvccInitialValue(
+            GridCacheContext cctx,
+            KeyCacheObject key,
+            @Nullable CacheObject val,
+            GridCacheVersion ver,
+            MvccCoordinatorVersion mvccVer)
+            throws IgniteCheckedException
+        {
+            assert mvccVer != null;
+
+            if (!busyLock.enterBusy())
+                throw new NodeStoppingException("Operation has been cancelled (node is stopping).");
+
+            try {
+                assert val != null || CacheCoordinatorsProcessor.versionForRemovedValue(mvccVer.coordinatorVersion());
+
+                int cacheId = grp.storeCacheIdInDataPage() ? cctx.cacheId() : CU.UNDEFINED_CACHE_ID;
+
+                CacheObjectContext coCtx = cctx.cacheObjectContext();
+
+                // Make sure value bytes initialized.
+                key.valueBytes(coCtx);
+
+                MvccUpdateRow updateRow;
+
+                if (val != null) {
+                    val.valueBytes(coCtx);
+
+                    updateRow = new MvccUpdateRow(
+                        key,
+                        val,
+                        ver,
+                        mvccVer,
+                        partId,
+                        cacheId);
+                }
+                else {
+                    updateRow = new MvccRemoveRow(
+                        key,
+                        mvccVer,
+                        partId,
+                        cacheId);
+                }
+
+                if (grp.sharedGroup() && updateRow.cacheId() == CU.UNDEFINED_CACHE_ID)
+                    updateRow.cacheId(cctx.cacheId());
+
+                rowStore.addRow(updateRow);
+
+                boolean old = dataTree.putx(updateRow);
+
+                assert !old;
+
+                if (val != null)
+                    incrementSize(cctx.cacheId());
+            }
+            finally {
+                busyLock.leaveBusy();
+            }
+
+            return true;
+        }
+
+        /** {@inheritDoc} */
+        @Override public GridLongList mvccUpdate(
+            GridCacheContext cctx,
+            boolean primary,
+            KeyCacheObject key,
+            CacheObject val,
+            GridCacheVersion ver,
+            MvccCoordinatorVersion mvccVer) throws IgniteCheckedException {
+            assert mvccVer != null;
+
+            if (!busyLock.enterBusy())
+                throw new NodeStoppingException("Operation has been cancelled (node is stopping).");
+
+            try {
+                int cacheId = grp.storeCacheIdInDataPage() ? cctx.cacheId() : CU.UNDEFINED_CACHE_ID;
+
+                CacheObjectContext coCtx = cctx.cacheObjectContext();
+
+                // Make sure value bytes initialized.
+                key.valueBytes(coCtx);
+                val.valueBytes(coCtx);
+
+                MvccUpdateRow updateRow = new MvccUpdateRow(
+                    key,
+                    val,
+                    ver,
+                    mvccVer,
+                    partId,
+                    cacheId);
+
+                if (grp.sharedGroup() && updateRow.cacheId() == CU.UNDEFINED_CACHE_ID)
+                    updateRow.cacheId(cctx.cacheId());
+
+                dataTree.iterate(updateRow, new MvccKeyMinVersionBound(cacheId, key), updateRow);
+
+                MvccUpdateRow.UpdateResult res = updateRow.updateResult();
+
+                if (res == MvccUpdateRow.UpdateResult.VERSION_FOUND) {
+                    assert !primary : updateRow;
+                }
+                else {
+                    rowStore.addRow(updateRow);
+
+                    boolean old = dataTree.putx(updateRow);
+
+                    assert !old;
+
+                    if (res == MvccUpdateRow.UpdateResult.PREV_NULL)
+                        incrementSize(cctx.cacheId());
+                }
+
+                cleanup(updateRow.cleanupRows(), false);
+
+                return updateRow.activeTransactions();
+            }
+            finally {
+                busyLock.leaveBusy();
+            }
+        }
+
+        /** {@inheritDoc} */
         @Override public GridLongList mvccRemove(GridCacheContext cctx,
             boolean primary,
             KeyCacheObject key,
@@ -1414,81 +1552,6 @@ public class IgniteCacheOffheapManagerImpl implements IgniteCacheOffheapManager 
                 }
 
                 return updateRow.activeTransactions();
-            }
-            finally {
-                busyLock.leaveBusy();
-            }
-        }
-
-        /** {@inheritDoc} */
-        @Override public GridLongList mvccUpdate(
-            GridCacheContext cctx,
-            boolean primary,
-            KeyCacheObject key,
-            CacheObject val,
-            GridCacheVersion ver,
-            MvccCoordinatorVersion mvccVer) throws IgniteCheckedException {
-            assert mvccVer != null;
-
-            if (!busyLock.enterBusy())
-                throw new NodeStoppingException("Operation has been cancelled (node is stopping).");
-
-            try {
-                int cacheId = grp.storeCacheIdInDataPage() ? cctx.cacheId() : CU.UNDEFINED_CACHE_ID;
-
-                CacheObjectContext coCtx = cctx.cacheObjectContext();
-
-                // Make sure value bytes initialized.
-                key.valueBytes(coCtx);
-                val.valueBytes(coCtx);
-
-                MvccUpdateRow updateRow = new MvccUpdateRow(
-                    key,
-                    val,
-                    ver,
-                    mvccVer,
-                    partId,
-                    cacheId);
-
-                if (grp.sharedGroup() && updateRow.cacheId() == CU.UNDEFINED_CACHE_ID)
-                    updateRow.cacheId(cctx.cacheId());
-
-                GridLongList waitTxs = null;
-
-                if (mvccVer.initialLoad()) {
-                    rowStore.addRow(updateRow);
-
-                    boolean old = dataTree.putx(updateRow);
-
-                    assert !old;
-
-                    incrementSize(cctx.cacheId());
-                }
-                else {
-                    dataTree.iterate(updateRow, new MvccKeyMinVersionBound(cacheId, key), updateRow);
-
-                    MvccUpdateRow.UpdateResult res = updateRow.updateResult();
-
-                    if (res == MvccUpdateRow.UpdateResult.VERSION_FOUND) {
-                        assert !primary : updateRow;
-                    }
-                    else {
-                        rowStore.addRow(updateRow);
-
-                        boolean old = dataTree.putx(updateRow);
-
-                        assert !old;
-
-                        if (res == MvccUpdateRow.UpdateResult.PREV_NULL)
-                            incrementSize(cctx.cacheId());
-                    }
-
-                    cleanup(updateRow.cleanupRows(), false);
-
-                    waitTxs = updateRow.activeTransactions();
-                }
-
-                return waitTxs;
             }
             finally {
                 busyLock.leaveBusy();
@@ -1848,7 +1911,10 @@ public class IgniteCacheOffheapManagerImpl implements IgniteCacheOffheapManager 
 
                         long rowCrdVer = unmaskCoordinatorVersion(rowCrdVerMasked);
 
-                        if (rowCrdVer > ver.coordinatorVersion() || row.mvccCounter() > ver.counter())
+                        if (rowCrdVer > ver.coordinatorVersion())
+                            continue;
+
+                        if (rowCrdVer == ver.coordinatorVersion() && row.mvccCounter() > ver.counter())
                             continue;
 
                         MvccLongList txs = ver.activeTransactions();

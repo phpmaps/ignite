@@ -189,6 +189,7 @@ public interface IgniteCacheOffheapManager {
         throws IgniteCheckedException;
 
     /**
+     * @param primary {@code True} if on primary node.
      * @param entry Entry.
      * @param val Value.
      * @param ver Cache version.
@@ -204,9 +205,31 @@ public interface IgniteCacheOffheapManager {
         MvccCoordinatorVersion mvccVer
     ) throws IgniteCheckedException;
 
+    /**
+     * @param primary {@code True} if on primary node.
+     * @param entry Entry.
+     * @param mvccVer Mvcc update version.
+     * @return Transactions to wait for before finishing current transaction.
+     * @throws IgniteCheckedException If failed.
+     */
     @Nullable public GridLongList mvccRemove(
         boolean primary,
         GridCacheMapEntry entry,
+        MvccCoordinatorVersion mvccVer
+    ) throws IgniteCheckedException;
+
+    /**
+     * @param entry Entry.
+     * @param val Value.
+     * @param ver Version.
+     * @param mvccVer Mvcc update version.
+     * @return {@code True} if value was inserted.
+     * @throws IgniteCheckedException If failed.
+     */
+    public boolean mvccInitialValue(
+        GridCacheMapEntry entry,
+        @Nullable CacheObject val,
+        GridCacheVersion ver,
         MvccCoordinatorVersion mvccVer
     ) throws IgniteCheckedException;
 
@@ -500,6 +523,22 @@ public interface IgniteCacheOffheapManager {
             GridCacheVersion ver,
             long expireTime,
             @Nullable CacheDataRow oldRow) throws IgniteCheckedException;
+
+        /**
+         * @param cctx Cache context.
+         * @param key Key.
+         * @param val Value.
+         * @param ver Version.
+         * @param mvccVer Mvcc version.
+         * @return {@code True} if new value was inserted.
+         * @throws IgniteCheckedException If failed.
+         */
+        boolean mvccInitialValue(
+            GridCacheContext cctx,
+            KeyCacheObject key,
+            @Nullable CacheObject val,
+            GridCacheVersion ver,
+            MvccCoordinatorVersion mvccVer) throws IgniteCheckedException;
 
         /**
          * @param cctx Cache context.

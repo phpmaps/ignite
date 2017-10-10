@@ -105,13 +105,13 @@ public class MvccUpdateRow extends DataRow implements BPlusTree.TreeRowClosure<C
         long rowCrdVer = unmaskCoordinatorVersion(io.getMvccCoordinatorVersion(pageAddr, idx));
         long rowCntr = io.getMvccCounter(pageAddr, idx);
 
-        int cmp = Long.compare(mvccVer.coordinatorVersion(), rowCrdVer);
+        int cmp = Long.compare(unmaskedCoordinatorVersion(), rowCrdVer);
 
         if (cmp == 0)
             cmp = Long.compare(mvccVer.counter(), rowCntr);
 
         // Can be equals if backup rebalanced value updated on primary.
-        assert cmp >= 0 : "[updCrd=" + mvccVer.coordinatorVersion() +
+        assert cmp >= 0 : "[updCrd=" + unmaskedCoordinatorVersion() +
             ", updCntr=" + mvccVer.counter() +
             ", rowCrd=" + rowCrdVer +
             ", rowCntr=" + rowCntr + ']';
@@ -138,11 +138,13 @@ public class MvccUpdateRow extends DataRow implements BPlusTree.TreeRowClosure<C
         long rowCrdVerMasked = rowIo.getMvccCoordinatorVersion(pageAddr, idx);
         long rowCrdVer = unmaskCoordinatorVersion(rowCrdVerMasked);
 
+        long crdVer = unmaskedCoordinatorVersion();
+
         if (res == null) {
-            int cmp = Long.compare(mvccVer.coordinatorVersion(), rowCrdVer);
+            int cmp = Long.compare(crdVer, rowCrdVer);
 
             if (cmp == 0)
-                cmp = Long.compare(mvccVer.coordinatorVersion(), rowIo.getMvccCounter(pageAddr, idx));
+                cmp = Long.compare(mvccVer.counter(), rowIo.getMvccCounter(pageAddr, idx));
 
             if (cmp == 0)
                 res = UpdateResult.VERSION_FOUND;
@@ -152,7 +154,7 @@ public class MvccUpdateRow extends DataRow implements BPlusTree.TreeRowClosure<C
         }
 
         // Suppose transactions on previous coordinator versions are done.
-        if (checkActive && mvccVer.coordinatorVersion() == rowCrdVer) {
+        if (checkActive && crdVer == rowCrdVer) {
             long rowMvccCntr = rowIo.getMvccCounter(pageAddr, idx);
 
             if (mvccVer.activeTransactions().contains(rowMvccCntr)) {
@@ -166,11 +168,11 @@ public class MvccUpdateRow extends DataRow implements BPlusTree.TreeRowClosure<C
         }
 
         if (!txActive) {
-            assert Long.compare(mvccVer.coordinatorVersion(), rowCrdVer) >= 0;
+            assert Long.compare(crdVer, rowCrdVer) >= 0;
 
             int cmp;
 
-            if (mvccVer.coordinatorVersion() == rowCrdVer)
+            if (crdVer == rowCrdVer)
                 cmp = Long.compare(mvccVer.cleanupVersion(), rowIo.getMvccCounter(pageAddr, idx));
             else
                 cmp = 1;
@@ -183,7 +185,7 @@ public class MvccUpdateRow extends DataRow implements BPlusTree.TreeRowClosure<C
                     assert row.link() != 0 && row.mvccCounter() != CacheCoordinatorsProcessor.COUNTER_NA : row;
 
                     // Should not be possible to cleanup active tx.
-                    assert rowCrdVer != mvccVer.coordinatorVersion()
+                    assert rowCrdVer != crdVer
                         || !mvccVer.activeTransactions().contains(row.mvccCounter());
 
                     if (cleanupRows == null)
@@ -197,6 +199,13 @@ public class MvccUpdateRow extends DataRow implements BPlusTree.TreeRowClosure<C
         }
 
         return true;
+    }
+
+    /**
+     * @return Coordinator version without flags.
+     */
+    protected long unmaskedCoordinatorVersion() {
+        return mvccVer.coordinatorVersion();
     }
 
     /** {@inheritDoc} */
