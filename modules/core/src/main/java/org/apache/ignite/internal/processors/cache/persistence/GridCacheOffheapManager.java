@@ -837,6 +837,11 @@ public class GridCacheOffheapManager extends IgniteCacheOffheapManagerImpl imple
         @Override public long mvccCoordinatorVersion() {
             return 0; // TODO IGNITE-3478.
         }
+
+        /** {@inheritDoc} */
+        @Override public boolean removed() {
+            return false;  // TODO IGNITE-3478.
+        }
     }
 
     /**

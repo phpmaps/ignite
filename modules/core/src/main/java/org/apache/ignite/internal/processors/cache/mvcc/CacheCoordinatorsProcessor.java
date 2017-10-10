@@ -146,19 +146,28 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
         super(ctx);
     }
 
-    public static int compareCoordinatorVersions(long crdVer1, long crdVer2) {
-        crdVer1 = CRD_VER_MASK & crdVer1;
-        crdVer2 = CRD_VER_MASK & crdVer2;
-
-        return Long.compare(crdVer1, crdVer2);
-    }
-
-    public long createVersionForRemovedValue(long crdVer) {
+    /**
+     * @param crdVer Coordinator version.
+     * @return Coordinator version with removed value flag.
+     */
+    public static long createVersionForRemovedValue(long crdVer) {
         return crdVer | RMVD_VAL_VER_MASK;
     }
 
-    public boolean versionForRemovedValue(long crdVer) {
+    /**
+     * @param crdVer Coordinator version with flags.
+     * @return {@code True} if removed value flag is set.
+     */
+    public static boolean versionForRemovedValue(long crdVer) {
         return (crdVer & RMVD_VAL_VER_MASK) != 0;
+    }
+
+    /**
+     * @param crdVer Coordinator version with flags.
+     * @return Coordinator version.
+     */
+    public static long unmaskCoordinatorVersion(long crdVer) {
+        return crdVer & CRD_VER_MASK;
     }
 
     /** {@inheritDoc} */

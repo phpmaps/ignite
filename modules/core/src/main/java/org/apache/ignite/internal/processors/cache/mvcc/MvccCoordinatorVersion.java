@@ -44,7 +44,7 @@ public interface MvccCoordinatorVersion extends Message {
     public long counter();
 
     /**
-     *
+     * @return {@code True} if version for initial load update.
      */
     public boolean initialLoad();
 }
