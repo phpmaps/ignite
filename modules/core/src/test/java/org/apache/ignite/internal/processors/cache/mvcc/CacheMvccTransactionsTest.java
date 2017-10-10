@@ -82,14 +82,18 @@ import org.apache.ignite.spi.discovery.tcp.ipfinder.vm.TcpDiscoveryVmIpFinder;
 import org.apache.ignite.testframework.GridTestUtils;
 import org.apache.ignite.testframework.junits.common.GridCommonAbstractTest;
 import org.apache.ignite.transactions.Transaction;
+import org.apache.ignite.transactions.TransactionConcurrency;
+import org.apache.ignite.transactions.TransactionIsolation;
 import org.jetbrains.annotations.Nullable;
 
 import static org.apache.ignite.cache.CacheAtomicityMode.TRANSACTIONAL;
 import static org.apache.ignite.cache.CacheMode.PARTITIONED;
 import static org.apache.ignite.cache.CacheMode.REPLICATED;
 import static org.apache.ignite.cache.CacheWriteSynchronizationMode.FULL_SYNC;
+import static org.apache.ignite.transactions.TransactionConcurrency.OPTIMISTIC;
 import static org.apache.ignite.transactions.TransactionConcurrency.PESSIMISTIC;
 import static org.apache.ignite.transactions.TransactionIsolation.REPEATABLE_READ;
+import static org.apache.ignite.transactions.TransactionIsolation.SERIALIZABLE;
 
 /**
  * TODO IGNITE-3478: extend tests to use single/mutiple nodes, all tx types.
@@ -182,7 +186,24 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
      * @throws Exception If failed.
      */
     public void testPessimisticTx1() throws Exception {
-        checkPessimisticTx(new CI1<IgniteCache<Integer, Integer>>() {
+        checkTx1(PESSIMISTIC, REPEATABLE_READ);
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testSerializableTx1() throws Exception {
+        checkTx1(OPTIMISTIC, SERIALIZABLE);
+    }
+
+    /**
+     * @param concurrency Transaction concurrency.
+     * @param isolation Transaction isolation.
+     * @throws Exception If failed.
+     */
+    private void checkTx1(final TransactionConcurrency concurrency, final TransactionIsolation isolation)
+        throws Exception {
+        checkTxWithAllCaches(new CI1<IgniteCache<Integer, Integer>>() {
             @Override public void apply(IgniteCache<Integer, Integer> cache) {
                 try {
                     IgniteTransactions txs = cache.unwrap(Ignite.class).transactions();
@@ -192,7 +213,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
                     for (Integer key : keys) {
                         log.info("Test key: " + key);
 
-                        try (Transaction tx = txs.txStart(PESSIMISTIC, REPEATABLE_READ)) {
+                        try (Transaction tx = txs.txStart(concurrency, isolation)) {
                             Integer val = cache.get(key);
 
                             assertNull(val);
@@ -222,7 +243,24 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
      * @throws Exception If failed.
      */
     public void testPessimisticTx2() throws Exception {
-        checkPessimisticTx(new CI1<IgniteCache<Integer, Integer>>() {
+        checkTx2(PESSIMISTIC, REPEATABLE_READ);
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testSerializableTx2() throws Exception {
+        checkTx2(OPTIMISTIC, SERIALIZABLE);
+    }
+
+    /**
+     * @param concurrency Transaction concurrency.
+     * @param isolation Transaction isolation.
+     * @throws Exception If failed.
+     */
+    private void checkTx2(final TransactionConcurrency concurrency, final TransactionIsolation isolation)
+        throws Exception {
+        checkTxWithAllCaches(new CI1<IgniteCache<Integer, Integer>>() {
             @Override public void apply(IgniteCache<Integer, Integer> cache) {
                 try {
                     IgniteTransactions txs = cache.unwrap(Ignite.class).transactions();
@@ -232,7 +270,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
                     for (Integer key : keys) {
                         log.info("Test key: " + key);
 
-                        try (Transaction tx = txs.txStart(PESSIMISTIC, REPEATABLE_READ)) {
+                        try (Transaction tx = txs.txStart(concurrency, isolation)) {
                             cache.put(key, key);
                             cache.put(key + 1, key + 1);
 
@@ -257,7 +295,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
      * @param c Closure to run.
      * @throws Exception If failed.
      */
-    private void checkPessimisticTx(IgniteInClosure<IgniteCache<Integer, Integer>> c) throws Exception {
+    private void checkTxWithAllCaches(IgniteInClosure<IgniteCache<Integer, Integer>> c) throws Exception {
         startGridsMultiThreaded(SRVS);
 
         try {
