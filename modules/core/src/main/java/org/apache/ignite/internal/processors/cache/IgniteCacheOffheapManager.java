@@ -549,22 +549,6 @@ public interface IgniteCacheOffheapManager {
 
         /**
          * @param cctx Cache context.
-         * @param key Key.
-         * @param val Value.
-         * @param ver Version.
-         * @param mvccVer Mvcc version.
-         * @return {@code True} if new value was inserted.
-         * @throws IgniteCheckedException If failed.
-         */
-        boolean mvccInitialValue(
-            GridCacheContext cctx,
-            KeyCacheObject key,
-            @Nullable CacheObject val,
-            GridCacheVersion ver,
-            MvccCoordinatorVersion mvccVer) throws IgniteCheckedException;
-
-        /**
-         * @param cctx Cache context.
          * @param primary {@code True} if update is executed on primary node.
          * @param key Key.
          * @param val Value.
@@ -579,12 +563,6 @@ public interface IgniteCacheOffheapManager {
             KeyCacheObject key,
             CacheObject val,
             GridCacheVersion ver,
-            MvccCoordinatorVersion mvccVer) throws IgniteCheckedException;
-
-        @Nullable GridLongList mvccRemove(
-            GridCacheContext cctx,
-            boolean primary,
-            KeyCacheObject key,
             MvccCoordinatorVersion mvccVer) throws IgniteCheckedException;
 
         /**
