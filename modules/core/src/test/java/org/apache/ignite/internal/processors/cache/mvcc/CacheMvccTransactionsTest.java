@@ -58,6 +58,8 @@ import org.apache.ignite.internal.processors.cache.distributed.near.GridNearGetR
 import org.apache.ignite.internal.processors.cache.distributed.near.GridNearGetResponse;
 import org.apache.ignite.internal.processors.cache.distributed.near.GridNearTxFinishRequest;
 import org.apache.ignite.internal.processors.cache.distributed.near.GridNearTxFinishResponse;
+import org.apache.ignite.internal.processors.cache.distributed.near.GridNearTxPrepareRequest;
+import org.apache.ignite.internal.processors.cache.distributed.near.GridNearTxPrepareResponse;
 import org.apache.ignite.internal.processors.cache.persistence.CacheDataRow;
 import org.apache.ignite.internal.util.lang.GridAbsPredicate;
 import org.apache.ignite.internal.util.lang.GridInClosure3;
@@ -84,6 +86,7 @@ import org.apache.ignite.testframework.junits.common.GridCommonAbstractTest;
 import org.apache.ignite.transactions.Transaction;
 import org.apache.ignite.transactions.TransactionConcurrency;
 import org.apache.ignite.transactions.TransactionIsolation;
+import org.apache.ignite.transactions.TransactionOptimisticException;
 import org.jetbrains.annotations.Nullable;
 
 import static org.apache.ignite.cache.CacheAtomicityMode.TRANSACTIONAL;
@@ -296,7 +299,13 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
      * @throws Exception If failed.
      */
     private void checkTxWithAllCaches(IgniteInClosure<IgniteCache<Integer, Integer>> c) throws Exception {
+        client = false;
+
         startGridsMultiThreaded(SRVS);
+
+        client = true;
+
+        startGrid(SRVS);
 
         try {
             for (CacheConfiguration<Object, Object> ccfg : cacheConfigurations()) {
@@ -1372,49 +1381,49 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
      * @throws Exception If failed.
      */
     public void testAccountsTxGetAll_SingleNode() throws Exception {
-        accountsTxGetAll(1, 0, 0, 64, false, ReadMode.GET_ALL);
+        accountsTxReadAll(1, 0, 0, 64, false, ReadMode.GET_ALL);
     }
 
     /**
      * @throws Exception If failed.
      */
     public void testAccountsTxGetAll_SingleNode_SinglePartition() throws Exception {
-        accountsTxGetAll(1, 0, 0, 1, false, ReadMode.GET_ALL);
+        accountsTxReadAll(1, 0, 0, 1, false, ReadMode.GET_ALL);
     }
 
     /**
      * @throws Exception If failed.
      */
     public void testAccountsTxGetAll_WithRemoves_SingleNode_SinglePartition() throws Exception {
-        accountsTxGetAll(1, 0, 0, 1, true, ReadMode.GET_ALL);
+        accountsTxReadAll(1, 0, 0, 1, true, ReadMode.GET_ALL);
     }
 
     /**
      * @throws Exception If failed.
      */
     public void testAccountsTxGetAll_ClientServer_Backups0() throws Exception {
-        accountsTxGetAll(4, 2, 0, 64, false, ReadMode.GET_ALL);
+        accountsTxReadAll(4, 2, 0, 64, false, ReadMode.GET_ALL);
     }
 
     /**
      * @throws Exception If failed.
      */
     public void testAccountsTxGetAll_ClientServer_Backups1() throws Exception {
-        accountsTxGetAll(4, 2, 1, 64, false, ReadMode.GET_ALL);
+        accountsTxReadAll(4, 2, 1, 64, false, ReadMode.GET_ALL);
     }
 
     /**
      * @throws Exception If failed.
      */
     public void testAccountsTxGetAll_ClientServer_Backups2() throws Exception {
-        accountsTxGetAll(4, 2, 2, 64, false, ReadMode.GET_ALL);
+        accountsTxReadAll(4, 2, 2, 64, false, ReadMode.GET_ALL);
     }
 
     /**
      * @throws Exception If failed.
      */
     public void testAccountsTxScan_SingleNode_SinglePartition() throws Exception {
-        accountsTxGetAll(1, 0, 0, 1, false, ReadMode.SCAN);
+        accountsTxReadAll(1, 0, 0, 1, false, ReadMode.SCAN);
     }
 
     /**
@@ -1426,7 +1435,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
      * @param readMode Read mode.
      * @throws Exception If failed.
      */
-    private void accountsTxGetAll(
+    private void accountsTxReadAll(
         final int srvs,
         final int clients,
         int cacheBackups,
@@ -1647,6 +1656,231 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
 
                         info("Sum: " + sum);
                     }
+                }
+            };
+
+        readWriteTest(
+            false,
+            srvs,
+            clients,
+            cacheBackups,
+            cacheParts,
+            writers,
+            readers,
+            DFLT_TEST_TIME,
+            init,
+            writer,
+            reader);
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testPessimisticTxReadsSnapshot_SingleNode_SinglePartition() throws Exception {
+        txReadsSnapshot(1, 0, 0, 1, true);
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testOptimisticTxReadsSnapshot_SingleNode_SinglePartition() throws Exception {
+        txReadsSnapshot(1, 0, 0, 1, false);
+    }
+
+    /**
+     * @param srvs Number of server nodes.
+     * @param clients Number of client nodes.
+     * @param cacheBackups Number of cache backups.
+     * @param cacheParts Number of cache partitions.
+     * @param pessimistic If {@code true} uses pessimistic tx, otherwise optimistic.
+     * @throws Exception If failed.
+     */
+    private void txReadsSnapshot(
+        final int srvs,
+        final int clients,
+        int cacheBackups,
+        int cacheParts,
+        final boolean pessimistic
+    ) throws Exception {
+        final int ACCOUNTS = 20;
+
+        final int ACCOUNT_START_VAL = 1000;
+
+        final int writers = 4;
+
+        final int readers = 4;
+
+        final TransactionConcurrency concurrency;
+        final TransactionIsolation isolation;
+
+        if (pessimistic) {
+            concurrency = PESSIMISTIC;
+            isolation = REPEATABLE_READ;
+        }
+        else {
+            concurrency = OPTIMISTIC;
+            isolation = SERIALIZABLE;
+        }
+
+        final IgniteInClosure<IgniteCache<Object, Object>> init = new IgniteInClosure<IgniteCache<Object, Object>>() {
+            @Override public void apply(IgniteCache<Object, Object> cache) {
+                final IgniteTransactions txs = cache.unwrap(Ignite.class).transactions();
+
+                Map<Integer, MvccTestAccount> accounts = new HashMap<>();
+
+                for (int i = 0; i < ACCOUNTS; i++)
+                    accounts.put(i, new MvccTestAccount(ACCOUNT_START_VAL, 1));
+
+                try (Transaction tx = txs.txStart(concurrency, isolation)) {
+                    cache.putAll(accounts);
+
+                    tx.commit();
+                }
+            }
+        };
+
+        GridInClosure3<Integer, List<IgniteCache>, AtomicBoolean> writer =
+            new GridInClosure3<Integer, List<IgniteCache>, AtomicBoolean>() {
+                @Override public void apply(Integer idx, List<IgniteCache> caches, AtomicBoolean stop) {
+                    ThreadLocalRandom rnd = ThreadLocalRandom.current();
+
+                    int cnt = 0;
+
+                    while (!stop.get()) {
+                        IgniteCache<Integer, MvccTestAccount> cache = randomCache(caches, rnd);
+                        IgniteTransactions txs = cache.unwrap(Ignite.class).transactions();
+
+                        cnt++;
+
+                        Integer id1 = rnd.nextInt(ACCOUNTS);
+                        Integer id2 = rnd.nextInt(ACCOUNTS);
+
+                        while (id1.equals(id2))
+                            id2 = rnd.nextInt(ACCOUNTS);
+
+                        TreeSet<Integer> keys = new TreeSet<>();
+
+                        keys.add(id1);
+                        keys.add(id2);
+
+                        try (Transaction tx = txs.txStart(PESSIMISTIC, REPEATABLE_READ)) {
+                            MvccTestAccount a1;
+                            MvccTestAccount a2;
+
+                            Map<Integer, MvccTestAccount> accounts = cache.getAll(keys);
+
+                            a1 = accounts.get(id1);
+                            a2 = accounts.get(id2);
+
+                            assertNotNull(a1);
+                            assertNotNull(a2);
+
+                            cache.put(id1, new MvccTestAccount(a1.val + 1, 1));
+                            cache.put(id2, new MvccTestAccount(a2.val - 1, 1));
+
+                            tx.commit();
+                        }
+                    }
+
+                    info("Writer finished, updates: " + cnt);
+                }
+            };
+
+        GridInClosure3<Integer, List<IgniteCache>, AtomicBoolean> reader =
+            new GridInClosure3<Integer, List<IgniteCache>, AtomicBoolean>() {
+                @Override public void apply(Integer idx, List<IgniteCache> caches, AtomicBoolean stop) {
+                    ThreadLocalRandom rnd = ThreadLocalRandom.current();
+
+                    int cnt = 0;
+
+                    while (!stop.get()) {
+                        IgniteCache<Integer, MvccTestAccount> cache = randomCache(caches, rnd);
+                        IgniteTransactions txs = cache.unwrap(Ignite.class).transactions();
+
+                        Map<Integer, MvccTestAccount> accounts = new HashMap<>();
+
+                        if (pessimistic) {
+                            try (Transaction tx = txs.txStart(concurrency, isolation)) {
+                                int remaining = ACCOUNTS;
+
+                                do {
+                                    // TODO IGNITE-3478: add single get usage.
+                                    int readCnt = rnd.nextInt(remaining) + 1;
+
+                                    Set<Integer> readKeys = new TreeSet<>();
+
+                                    for (int i = 0; i < readCnt; i++)
+                                        readKeys.add(accounts.size() + i);
+
+                                    Map<Integer, MvccTestAccount> readRes = cache.getAll(readKeys);
+
+                                    assertEquals(readCnt, readRes.size());
+
+                                    accounts.putAll(readRes);
+
+                                    remaining = ACCOUNTS - accounts.size();
+                                }
+                                while (remaining > 0);
+
+                                validateSum(accounts);
+
+                                tx.commit();
+
+                                cnt++;
+                            }
+                        }
+                        else {
+                            try (Transaction tx = txs.txStart(concurrency, isolation)) {
+                                int remaining = ACCOUNTS;
+
+                                do {
+                                    int readCnt = rnd.nextInt(remaining) + 1;
+
+                                    Set<Integer> readKeys = new LinkedHashSet<>();
+
+                                    for (int i = 0; i < readCnt; i++)
+                                        readKeys.add(rnd.nextInt(ACCOUNTS));
+
+                                    Map<Integer, MvccTestAccount> readRes = cache.getAll(readKeys);
+
+                                    assertEquals(readKeys.size(), readRes.size());
+
+                                    accounts.putAll(readRes);
+
+                                    remaining = ACCOUNTS - accounts.size();
+                                }
+                                while (remaining > 0);
+
+                                validateSum(accounts);
+
+                                cnt++;
+
+                                tx.commit();
+                            }
+                            catch (TransactionOptimisticException ignore) {
+                                // No-op.
+                            }
+                        }
+                    }
+
+                    info("Reader finished, txs: " + cnt);
+                }
+
+                /**
+                 * @param accounts Read accounts.
+                 */
+                private void validateSum(Map<Integer, MvccTestAccount> accounts) {
+                    int sum = 0;
+
+                    for (int i = 0; i < ACCOUNTS; i++) {
+                        MvccTestAccount account = accounts.get(i);
+
+                        assertNotNull(account);
+
+                        sum += account.val;
+                    }
+
+                    assertEquals(ACCOUNTS * ACCOUNT_START_VAL, sum);
                 }
             };
 
@@ -1970,7 +2204,26 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
     /**
      * @throws Exception If failed.
      */
-    public void testCoordinatorFailurePessimisticTx() throws Exception {
+    public void testCoordinatorFailureSimplePessimisticTx() throws Exception {
+        coordinatorFailureSimple(PESSIMISTIC, REPEATABLE_READ);
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testCoordinatorFailureSimpleSerializableTx() throws Exception {
+        coordinatorFailureSimple(OPTIMISTIC, SERIALIZABLE);
+    }
+
+    /**
+     * @param concurrency Transaction concurrency.
+     * @param isolation Transaction isolation.
+     * @throws Exception If failed.
+     */
+    private void coordinatorFailureSimple(
+        final TransactionConcurrency concurrency,
+        final TransactionIsolation isolation
+    ) throws Exception {
         testSpi = true;
 
         startGrids(3);
@@ -1992,7 +2245,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
         IgniteInternalFuture fut = GridTestUtils.runAsync(new Callable() {
             @Override public Object call() throws Exception {
                 try {
-                    try (Transaction tx = client.transactions().txStart(PESSIMISTIC, REPEATABLE_READ)) {
+                    try (Transaction tx = client.transactions().txStart(concurrency, isolation)) {
                         cache.put(key1, 1);
                         cache.put(key2, 2);
 
@@ -2003,6 +2256,10 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
                 }
                 catch (ClusterTopologyException e) {
                     info("Expected exception: " + e);
+
+                    assertNotNull(e.retryReadyFuture());
+
+                    e.retryReadyFuture().get();
                 }
 
                 return null;
@@ -2018,7 +2275,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
         assertNull(cache.get(key1));
         assertNull(cache.get(key2));
 
-        try (Transaction tx = client.transactions().txStart(PESSIMISTIC, REPEATABLE_READ)) {
+        try (Transaction tx = client.transactions().txStart(concurrency, isolation)) {
             cache.put(key1, 1);
             cache.put(key2, 2);
 
@@ -2027,6 +2284,149 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
 
         assertEquals(1, cache.get(key1));
         assertEquals(2, cache.get(key2));
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testTxPrepareFailureSimplePessimisticTx() throws Exception {
+        txPrepareFailureSimple(PESSIMISTIC, REPEATABLE_READ);
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testTxPrepareFailureSimpleSerializableTx() throws Exception {
+        txPrepareFailureSimple(OPTIMISTIC, SERIALIZABLE);
+    }
+
+    /**
+     * @param concurrency Transaction concurrency.
+     * @param isolation Transaction isolation.
+     * @throws Exception If failed.
+     */
+    private void txPrepareFailureSimple(
+        final TransactionConcurrency concurrency,
+        final TransactionIsolation isolation
+    ) throws Exception {
+        testSpi = true;
+
+        startGrids(3);
+
+        client = true;
+
+        final Ignite client = startGrid(3);
+
+        final IgniteCache cache = client.createCache(
+            cacheConfiguration(PARTITIONED, FULL_SYNC, 0, DFLT_PARTITION_COUNT));
+
+        final Integer key1 = primaryKey(jcache(1));
+        final Integer key2 = primaryKey(jcache(2));
+
+        TestRecordingCommunicationSpi srv1Spi = TestRecordingCommunicationSpi.spi(ignite(1));
+
+        srv1Spi.blockMessages(GridNearTxPrepareResponse.class, client.name());
+
+        IgniteInternalFuture fut = GridTestUtils.runAsync(new Callable() {
+            @Override public Object call() throws Exception {
+                try {
+                    try (Transaction tx = client.transactions().txStart(concurrency, isolation)) {
+                        cache.put(key1, 1);
+                        cache.put(key2, 2);
+
+                        tx.commit();
+                    }
+
+                    fail();
+                }
+                catch (ClusterTopologyException e) {
+                    info("Expected exception: " + e);
+
+                    assertNotNull(e.retryReadyFuture());
+
+                    e.retryReadyFuture().get();
+                }
+
+                return null;
+            }
+        }, "tx-thread");
+
+        srv1Spi.waitForBlocked();
+
+        assertFalse(fut.isDone());
+
+        stopGrid(1);
+
+        fut.get();
+
+        assertNull(cache.get(key1));
+        assertNull(cache.get(key2));
+
+        try (Transaction tx = client.transactions().txStart(concurrency, isolation)) {
+            cache.put(key1, 1);
+            cache.put(key2, 2);
+
+            tx.commit();
+        }
+
+        assertEquals(1, cache.get(key1));
+        assertEquals(2, cache.get(key2));
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testSerializableTxRemap() throws Exception {
+        testSpi = true;
+
+        startGrids(2);
+
+        client = true;
+
+        final Ignite client = startGrid(2);
+
+        final IgniteCache cache = client.createCache(
+            cacheConfiguration(PARTITIONED, FULL_SYNC, 0, DFLT_PARTITION_COUNT));
+
+        final Map<Object, Object> vals = new HashMap<>();
+
+        for (int i = 0; i < 100; i++)
+            vals.put(i, i);
+
+        TestRecordingCommunicationSpi clientSpi = TestRecordingCommunicationSpi.spi(ignite(2));
+
+        clientSpi.blockMessages(new IgniteBiPredicate<ClusterNode, Message>() {
+            @Override public boolean apply(ClusterNode node, Message msg) {
+                return msg instanceof GridNearTxPrepareRequest;
+            }
+        });
+
+        IgniteInternalFuture fut = GridTestUtils.runAsync(new Callable() {
+            @Override public Object call() throws Exception {
+                try (Transaction tx = client.transactions().txStart(OPTIMISTIC, SERIALIZABLE)) {
+                    cache.putAll(vals);
+
+                    tx.commit();
+                }
+
+                return null;
+            }
+        }, "tx-thread");
+
+        clientSpi.waitForBlocked(2);
+
+        this.client = false;
+
+        startGrid(3);
+
+        assertFalse(fut.isDone());
+
+        clientSpi.stopBlock();
+
+        fut.get();
+
+        for (Ignite node : G.allGrids())
+            checkValues(vals, node.cache(cache.getName()));
     }
 
     /**
@@ -3262,7 +3662,8 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
 
             Map activeTxs = GridTestUtils.getFieldValue(crd, "activeTxs");
 
-            assertTrue(activeTxs.isEmpty());
+            assertTrue("Txs on node [node=" + node.name() + ", txs=" + activeTxs.toString() + ']',
+                activeTxs.isEmpty());
 
             Map cntrFuts = GridTestUtils.getFieldValue(crd, "verFuts");
 

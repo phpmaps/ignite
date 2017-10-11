@@ -30,6 +30,7 @@ import org.jetbrains.annotations.Nullable;
 
 /**
  * TODO IGNITE-3478: make sure clean up is called when related future is forcibly finished, i.e. on cache stop
+ * TODO IGNITE-3478: support remap to new coordinator.
  */
 public class MvccQueryTracker {
     /** */
@@ -147,6 +148,7 @@ public class MvccQueryTracker {
             }
         }
 
+        // TODO IGNITE-3478: get rid of future creation in 'requestQueryCounter'.
         IgniteInternalFuture<MvccCoordinatorVersion> cntrFut =
             cctx.shared().coordinators().requestQueryCounter(mvccCrd0);
 

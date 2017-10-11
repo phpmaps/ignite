@@ -809,23 +809,35 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
             Map<MvccCounter, Integer> activeQrys = new HashMap<>();
 
             for (GridCacheFuture<?> fut : cctx.mvcc().activeFutures()) {
-                if (fut instanceof MvccQueryAware) {
-                    MvccCoordinatorVersion ver = ((MvccQueryAware)fut).onMvccCoordinatorChange(mvccCrd);
-
-                    if (ver != null ) {
-                        MvccCounter cntr = new MvccCounter(ver.coordinatorVersion(), ver.counter());
-
-                        Integer cnt = activeQrys.get(cntr);
-
-                        if (cnt == null)
-                            activeQrys.put(cntr, 1);
-                        else
-                            activeQrys.put(cntr, cnt + 1);
-                    }
-                }
+                if (fut instanceof MvccQueryAware)
+                    processMvccCoordinatorChange(mvccCrd, (MvccQueryAware)fut, activeQrys);
             }
 
             exchCtx.addActiveQueries(cctx.localNodeId(), activeQrys);
+        }
+    }
+
+    /**
+     * @param mvccCrd New coordinator.
+     * @param qryAware Mvcc query aware.
+     * @param activeQrys Active queries map to update.
+     */
+    private void processMvccCoordinatorChange(MvccCoordinator mvccCrd,
+        MvccQueryAware qryAware,
+        Map<MvccCounter, Integer> activeQrys
+        )
+    {
+        MvccCoordinatorVersion ver = qryAware.onMvccCoordinatorChange(mvccCrd);
+
+        if (ver != null ) {
+            MvccCounter cntr = new MvccCounter(ver.coordinatorVersion(), ver.counter());
+
+            Integer cnt = activeQrys.get(cntr);
+
+            if (cnt == null)
+                activeQrys.put(cntr, 1);
+            else
+                activeQrys.put(cntr, cnt + 1);
         }
     }
 

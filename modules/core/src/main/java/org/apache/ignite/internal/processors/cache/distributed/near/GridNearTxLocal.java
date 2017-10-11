@@ -61,6 +61,10 @@ import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtTxLoca
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtTxPrepareFuture;
 import org.apache.ignite.internal.processors.cache.distributed.dht.colocated.GridDhtDetachedCacheEntry;
 import org.apache.ignite.internal.processors.cache.dr.GridCacheDrInfo;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinator;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorVersion;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccQueryAware;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccQueryTracker;
 import org.apache.ignite.internal.processors.cache.transactions.IgniteInternalTx;
 import org.apache.ignite.internal.processors.cache.transactions.IgniteTxEntry;
 import org.apache.ignite.internal.processors.cache.transactions.IgniteTxKey;
@@ -168,6 +172,9 @@ public class GridNearTxLocal extends GridDhtTxLocalAdapter implements GridTimeou
     /** */
     @GridToStringExclude
     private TransactionProxyImpl proxy;
+
+    /** */
+    private MvccQueryTracker mvccTracker;
 
     /**
      * Empty constructor required for {@link Externalizable}.
@@ -1665,7 +1672,7 @@ public class GridNearTxLocal extends GridDhtTxLocalAdapter implements GridTimeou
     public <K, V> IgniteInternalFuture<Map<K, V>> getAllAsync(
         final GridCacheContext cacheCtx,
         @Nullable final AffinityTopologyVersion entryTopVer,
-        Collection<KeyCacheObject> keys,
+        final Collection<KeyCacheObject> keys,
         final boolean deserializeBinary,
         final boolean skipVals,
         final boolean keepCacheObjects,
@@ -1676,6 +1683,48 @@ public class GridNearTxLocal extends GridDhtTxLocalAdapter implements GridTimeou
             return new GridFinishedFuture<>(Collections.<K, V>emptyMap());
 
         init();
+
+        if (cacheCtx.mvccEnabled() && optimistic() && mvccTracker == null) {
+            // TODO IGNITE-3478: support rollback on timeout.
+            final GridFutureAdapter fut = new GridFutureAdapter();
+
+            boolean canRemap = cctx.lockedTopologyVersion(null) == null;
+
+            mvccTracker = new MvccQueryTracker(cacheCtx, canRemap, new MvccQueryAware() {
+                @Nullable @Override public MvccCoordinatorVersion onMvccCoordinatorChange(MvccCoordinator newCrd) {
+                    return mvccTracker.onMvccCoordinatorChange(newCrd);
+                }
+
+                @Override public void onMvccVersionReceived(AffinityTopologyVersion topVer) {
+                    getAllAsync(cacheCtx,
+                        entryTopVer,
+                        keys,
+                        deserializeBinary,
+                        skipVals,
+                        keepCacheObjects,
+                        skipStore,
+                        recovery,
+                        needVer).listen(new IgniteInClosure<IgniteInternalFuture<Map<Object, Object>>>() {
+                        @Override public void apply(IgniteInternalFuture<Map<Object, Object>> fut0) {
+                            try {
+                                fut.onDone(fut0.get());
+                            }
+                            catch (IgniteCheckedException e) {
+                                fut.onDone(e);
+                            }
+                        }
+                    });
+                }
+
+                @Override public void onMvccVersionError(IgniteCheckedException e) {
+                    fut.onDone(e);
+                }
+            });
+
+            mvccTracker.requestVersion(topologyVersion());
+
+            return fut;
+        }
 
         int keysCnt = keys.size();
 
@@ -2464,7 +2513,7 @@ public class GridNearTxLocal extends GridDhtTxLocalAdapter implements GridTimeou
      * @param expiryPlc Expiry policy.
      * @return Future with {@code True} value if loading took place.
      */
-    public IgniteInternalFuture<Void> loadMissing(
+    private IgniteInternalFuture<Void> loadMissing(
         final GridCacheContext cacheCtx,
         AffinityTopologyVersion topVer,
         boolean readThrough,

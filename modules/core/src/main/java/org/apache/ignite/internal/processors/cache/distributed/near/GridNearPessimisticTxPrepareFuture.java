@@ -456,6 +456,12 @@ public class GridNearPessimisticTxPrepareFuture extends GridNearTxPrepareFutureA
 
     /** {@inheritDoc} */
     @Override public void onMvccError(IgniteCheckedException e) {
+        if (e instanceof ClusterTopologyCheckedException) {
+            IgniteInternalFuture<?> fut = cctx.nextAffinityReadyFuture(tx.topologyVersion());
+
+            ((ClusterTopologyCheckedException)e).retryReadyFuture(fut);
+        }
+
         ERR_UPD.compareAndSet(GridNearPessimisticTxPrepareFuture.this, null, e);
     }
 
@@ -496,8 +502,8 @@ public class GridNearPessimisticTxPrepareFuture extends GridNearTxPrepareFutureA
                     CacheCoordinatorsProcessor.MvccVersionFuture crdFut =
                         (CacheCoordinatorsProcessor.MvccVersionFuture)f;
 
-                    return "[mvccCrdNode=" + crdFut.crdId +
-                        ", loc=" + crdFut.crdId.equals(cctx.localNodeId()) +
+                    return "[mvccCrdNode=" + crdFut.crd.nodeId() +
+                        ", loc=" + crdFut.crd.nodeId().equals(cctx.localNodeId()) +
                         ", done=" + f.isDone() + "]";
                 }
                 else

@@ -306,9 +306,7 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
         GridCacheVersion txVer) {
         assert !ctx.localNodeId().equals(crd.nodeId());
 
-        MvccVersionFuture fut = new MvccVersionFuture(futIdCntr.incrementAndGet(),
-            crd.nodeId(),
-            lsnr);
+        MvccVersionFuture fut = new MvccVersionFuture(futIdCntr.incrementAndGet(), crd, lsnr);
 
         verFuts.put(fut.id, fut);
 
@@ -372,7 +370,7 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
         assert crd != null;
 
         // TODO IGNITE-3478: special case for local?
-        MvccVersionFuture fut = new MvccVersionFuture(futIdCntr.incrementAndGet(), crd.nodeId(), null);
+        MvccVersionFuture fut = new MvccVersionFuture(futIdCntr.incrementAndGet(), crd, null);
 
         verFuts.put(fut.id, fut);
 
@@ -1070,18 +1068,19 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
         private MvccResponseListener lsnr;
 
         /** */
-        public final UUID crdId;
+        public final MvccCoordinator crd;
 
         /** */
         long startTime;
 
         /**
          * @param id Future ID.
-         * @param crdId Coordinator node ID.
+         * @param crd Mvcc coordinator.
+         * @param lsnr Listener.
          */
-        MvccVersionFuture(Long id, UUID crdId, @Nullable MvccResponseListener lsnr) {
+        MvccVersionFuture(Long id, MvccCoordinator crd, @Nullable MvccResponseListener lsnr) {
             this.id = id;
-            this.crdId = crdId;
+            this.crd = crd;
             this.lsnr = lsnr;
 
             if (STAT_CNTRS)
@@ -1095,7 +1094,7 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
             assert res.counter() != COUNTER_NA;
 
             if (lsnr != null)
-                lsnr.onMvccResponse(crdId, res);
+                lsnr.onMvccResponse(crd.nodeId(), res);
 
             onDone(res);
         }
@@ -1114,7 +1113,7 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
          * @param nodeId Failed node ID.
          */
         void onNodeLeft(UUID nodeId ) {
-            if (crdId.equals(nodeId) && verFuts.remove(id) != null) {
+            if (crd.nodeId().equals(nodeId) && verFuts.remove(id) != null) {
                 ClusterTopologyCheckedException err = new ClusterTopologyCheckedException("Failed to request mvcc " +
                     "version, coordinator failed: " + nodeId);
 
@@ -1124,7 +1123,7 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
 
         /** {@inheritDoc} */
         @Override public String toString() {
-            return "MvccVersionFuture [crd=" + crdId + ", id=" + id + ']';
+            return "MvccVersionFuture [crd=" + crd.nodeId() + ", id=" + id + ']';
         }
     }
 
