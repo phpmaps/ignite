@@ -520,7 +520,7 @@ public abstract class IgniteTxLocalAdapter extends IgniteTxAdapter implements Ig
             try {
                 cctx.tm().txContext(this);
 
-                assert !txState.mvccEnabled(cctx) || mvccInfo != null;
+                assert !txState.mvccEnabled(cctx) || mvccInfo != null : "Mvcc is not initialized: " + this;
 
                 AffinityTopologyVersion topVer = topologyVersion();
 
