@@ -1659,6 +1659,13 @@ public class GridNearTxLocal extends GridDhtTxLocalAdapter implements GridTimeou
         }
     }
 
+    private MvccCoordinatorVersion mvccReadVersion(GridCacheContext cctx) {
+        if (!cctx.mvccEnabled() || mvccTracker == null)
+            return null;
+
+        return mvccTracker.mvccVersion();
+    }
+
     /**
      * @param cacheCtx Cache context.
      * @param keys Keys to get.
@@ -1830,8 +1837,8 @@ public class GridNearTxLocal extends GridDhtTxLocalAdapter implements GridTimeou
                                             resolveTaskName(),
                                             null,
                                             txEntry.keepBinary(),
-                                            null,
-                                            null); // TODO IGNITE-3478
+                                            null, // TODO IGNITE-3478
+                                            null);
 
                                         if (getRes != null) {
                                             val = getRes.value();
@@ -2214,8 +2221,8 @@ public class GridNearTxLocal extends GridDhtTxLocalAdapter implements GridTimeou
                                         resolveTaskName(),
                                         accessPlc,
                                         !deserializeBinary,
-                                        null,
-                                        null) : null; // TODO IGNITE-3478
+                                        mvccReadVersion(cacheCtx), // TODO IGNITE-3478
+                                        null) : null;
 
                                 if (getRes != null) {
                                     val = getRes.value();
@@ -2234,7 +2241,7 @@ public class GridNearTxLocal extends GridDhtTxLocalAdapter implements GridTimeou
                                     resolveTaskName(),
                                     accessPlc,
                                     !deserializeBinary,
-                                    null); // TODO IGNITE-3478
+                                    mvccReadVersion(cacheCtx)); // TODO IGNITE-3478
                             }
 
                             if (val != null) {
@@ -2572,7 +2579,8 @@ public class GridNearTxLocal extends GridDhtTxLocalAdapter implements GridTimeou
                     skipVals,
                     needVer,
                     /*keepCacheObject*/true,
-                    recovery
+                    recovery,
+                    mvccReadVersion(cacheCtx)
                 ).chain(new C1<IgniteInternalFuture<Object>, Void>() {
                     @Override public Void apply(IgniteInternalFuture<Object> f) {
                         try {
@@ -2603,7 +2611,8 @@ public class GridNearTxLocal extends GridDhtTxLocalAdapter implements GridTimeou
                     expiryPlc0,
                     skipVals,
                     needVer,
-                    /*keepCacheObject*/true
+                    /*keepCacheObject*/true,
+                    mvccReadVersion(cacheCtx)
                 ).chain(new C1<IgniteInternalFuture<Map<Object, Object>>, Void>() {
                     @Override public Void apply(IgniteInternalFuture<Map<Object, Object>> f) {
                         try {

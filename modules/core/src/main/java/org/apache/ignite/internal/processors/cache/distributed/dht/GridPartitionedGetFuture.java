@@ -78,6 +78,9 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
     private static IgniteLogger log;
 
     /** */
+    protected final MvccCoordinatorVersion mvccVer;
+
+    /** */
     private MvccQueryTracker mvccTracker;
 
     /**
@@ -94,6 +97,7 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
      * @param skipVals Skip values flag.
      * @param needVer If {@code true} returns values as tuples containing value and version.
      * @param keepCacheObjects Keep cache objects flag.
+     * @param mvccVer Mvcc version.
      */
     public GridPartitionedGetFuture(
         GridCacheContext<K, V> cctx,
@@ -107,7 +111,8 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
         @Nullable IgniteCacheExpiryPolicy expiryPlc,
         boolean skipVals,
         boolean needVer,
-        boolean keepCacheObjects
+        boolean keepCacheObjects,
+        @Nullable MvccCoordinatorVersion mvccVer
     ) {
         super(cctx,
             keys,
@@ -121,6 +126,9 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
             needVer,
             keepCacheObjects,
             recovery);
+        assert mvccVer == null || cctx.mvccEnabled();
+
+        this.mvccVer = mvccVer;
 
         if (log == null)
             log = U.logger(cctx.kernalContext(), logRef, GridPartitionedGetFuture.class);
@@ -132,6 +140,9 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
     @Nullable private MvccCoordinatorVersion mvccVersion() {
         if (!cctx.mvccEnabled())
             return null;
+
+        if (mvccVer != null)
+            return mvccVer;
 
         MvccCoordinatorVersion ver = mvccTracker.mvccVersion();
 
@@ -158,7 +169,7 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
                 canRemap ? cctx.affinity().affinityTopologyVersion() : cctx.shared().exchange().readyAffinityVersion();
         }
 
-        if (cctx.mvccEnabled()) {
+        if (cctx.mvccEnabled() && mvccVer == null) {
             mvccTracker = new MvccQueryTracker(cctx, canRemap, this);
 
             trackable = true;
