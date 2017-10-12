@@ -176,7 +176,7 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
 
         statCntrs[0] = new CounterWithAvg("CoordinatorTxCounterRequest", "avgTxs");
         statCntrs[1] = new CounterWithAvg("MvccCoordinatorVersionResponse", "avgFutTime");
-        statCntrs[2] = new StatCounter("CoordinatorTxAckRequest");
+        statCntrs[2] = new StatCounter("CoordinatorAckRequestTx");
         statCntrs[3] = new CounterWithAvg("CoordinatorTxAckResponse", "avgFutTime");
         statCntrs[4] = new StatCounter("TotalRequests");
         statCntrs[5] = new StatCounter("CoordinatorWaitTxsRequest");
@@ -331,20 +331,9 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
     public void ackQueryDone(MvccCoordinator crd, MvccCoordinatorVersion mvccVer) {
         assert crd != null;
 
-        long trackCntr = mvccVer.counter();
+        long trackCntr = queryTrackCounter(mvccVer);
 
-        MvccLongList txs = mvccVer.activeTransactions();
-
-        if (txs != null) {
-            for (int i = 0; i < txs.size(); i++) {
-                long txId = txs.get(i);
-
-                if (txId < trackCntr)
-                    trackCntr = txId;
-            }
-        }
-
-        Message msg = crd.coordinatorVersion() == mvccVer.coordinatorVersion() ? new CoordinatorQueryAckRequest(trackCntr) :
+        Message msg = crd.coordinatorVersion() == mvccVer.coordinatorVersion() ? new CoordinatorAckRequestQuery(trackCntr) :
             new NewCoordinatorQueryAckRequest(mvccVer.coordinatorVersion(), trackCntr);
 
         try {
@@ -360,6 +349,27 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
         catch (IgniteCheckedException e) {
             U.error(log, "Failed to send query ack [crd=" + crd + ", msg=" + msg + ']', e);
         }
+    }
+
+    /**
+     * @param mvccVer Read version.
+     * @return
+     */
+    private long queryTrackCounter(MvccCoordinatorVersion mvccVer) {
+        long trackCntr = mvccVer.counter();
+
+        MvccLongList txs = mvccVer.activeTransactions();
+
+        int size = txs.size();
+
+        for (int i = 0; i < size; i++) {
+            long txId = txs.get(i);
+
+            if (txId < trackCntr)
+                trackCntr = txId;
+        }
+
+        return trackCntr;
     }
 
     /**
@@ -422,22 +432,42 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
 
     /**
      * @param crd Coordinator.
-     * @param mvccVer Transaction version.
+     * @param updateVer Transaction update version.
+     * @param readVer Transaction read version.
      * @return Acknowledge future.
      */
-    public IgniteInternalFuture<Void> ackTxCommit(UUID crd, MvccCoordinatorVersion mvccVer) {
+    public IgniteInternalFuture<Void> ackTxCommit(UUID crd,
+        MvccCoordinatorVersion updateVer,
+        @Nullable MvccCoordinatorVersion readVer) {
         assert crd != null;
-        assert mvccVer != null;
+        assert updateVer != null;
 
         WaitAckFuture fut = new WaitAckFuture(futIdCntr.incrementAndGet(), crd, true);
 
         ackFuts.put(fut.id, fut);
 
+        MvccCoordinatorMessage msg;
+
+        if (readVer != null) {
+            long trackCntr = queryTrackCounter(readVer);
+
+            if (readVer.coordinatorVersion() == updateVer.coordinatorVersion()) {
+                msg = new CoordinatorAckRequestTxAndQuery(fut.id,
+                    updateVer.counter(),
+                    trackCntr);
+            }
+            else {
+                msg = new CoordinatorAckRequestTxAndQueryEx(fut.id,
+                    updateVer.counter(),
+                    readVer.coordinatorVersion(),
+                    trackCntr);
+            }
+        }
+        else
+            msg = new CoordinatorAckRequestTx(fut.id, updateVer.counter());
+
         try {
-            ctx.io().sendToGridTopic(crd,
-                MSG_TOPIC,
-                new CoordinatorTxAckRequest(fut.id, mvccVer.counter()),
-                MSG_POLICY);
+            ctx.io().sendToGridTopic(crd, MSG_TOPIC, msg, MSG_POLICY);
         }
         catch (IgniteCheckedException e) {
             if (ackFuts.remove(fut.id) != null) {
@@ -456,7 +486,7 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
      * @param mvccVer Transaction version.
      */
     public void ackTxRollback(UUID crdId, MvccCoordinatorVersion mvccVer) {
-        CoordinatorTxAckRequest msg = new CoordinatorTxAckRequest(0, mvccVer.counter());
+        CoordinatorAckRequestTx msg = new CoordinatorAckRequestTx(0, mvccVer.counter());
 
         msg.skipResponse(true);
 
@@ -568,7 +598,7 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
      * @param nodeId Node ID.
      * @param msg Message.
      */
-    private void processCoordinatorQueryAckRequest(UUID nodeId, CoordinatorQueryAckRequest msg) {
+    private void processCoordinatorQueryAckRequest(UUID nodeId, CoordinatorAckRequestQuery msg) {
         onQueryDone(nodeId, msg.counter());
     }
 
@@ -577,15 +607,22 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
      * @param msg Message.
      */
     private void processNewCoordinatorQueryAckRequest(UUID nodeId, NewCoordinatorQueryAckRequest msg) {
-        prevCrdQueries.onQueryDone(nodeId, msg);
+        prevCrdQueries.onQueryDone(nodeId, msg.coordinatorVersion(), msg.counter());
     }
 
     /**
      * @param nodeId Sender node ID.
      * @param msg Message.
      */
-    private void processCoordinatorTxAckRequest(UUID nodeId, CoordinatorTxAckRequest msg) {
+    private void processCoordinatorTxAckRequest(UUID nodeId, CoordinatorAckRequestTx msg) {
         onTxDone(msg.txCounter());
+
+        if (msg.queryCounter() != COUNTER_NA) {
+            if (msg.queryCoordinatorVersion() == 0)
+                onQueryDone(nodeId, msg.queryCounter());
+            else
+                prevCrdQueries.onQueryDone(nodeId, msg.queryCoordinatorVersion(), msg.queryCounter());
+        }
 
         if (STAT_CNTRS)
             statCntrs[2].update();
@@ -1238,12 +1275,12 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
 
             if (msg instanceof CoordinatorTxCounterRequest)
                 processCoordinatorTxCounterRequest(nodeId, (CoordinatorTxCounterRequest)msg);
-            else if (msg instanceof CoordinatorTxAckRequest)
-                processCoordinatorTxAckRequest(nodeId, (CoordinatorTxAckRequest)msg);
+            else if (msg instanceof CoordinatorAckRequestTx)
+                processCoordinatorTxAckRequest(nodeId, (CoordinatorAckRequestTx)msg);
             else if (msg instanceof CoordinatorFutureResponse)
                 processCoordinatorAckResponse(nodeId, (CoordinatorFutureResponse)msg);
-            else if (msg instanceof CoordinatorQueryAckRequest)
-                processCoordinatorQueryAckRequest(nodeId, (CoordinatorQueryAckRequest)msg);
+            else if (msg instanceof CoordinatorAckRequestQuery)
+                processCoordinatorQueryAckRequest(nodeId, (CoordinatorAckRequestQuery)msg);
             else if (msg instanceof CoordinatorQueryVersionRequest)
                 processCoordinatorQueryVersionRequest(nodeId, (CoordinatorQueryVersionRequest)msg);
             else if (msg instanceof MvccCoordinatorVersionResponse)

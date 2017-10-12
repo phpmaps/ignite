@@ -158,23 +158,27 @@ class PreviousCoordinatorQueries {
 
     /**
      * @param nodeId Node ID.
-     * @param msg Message.
+     * @param crdVer Coordinator version.
+     * @param cntr Counter.
      */
-    void onQueryDone(UUID nodeId, NewCoordinatorQueryAckRequest msg) {
+    void onQueryDone(UUID nodeId, long crdVer, long cntr) {
+        assert crdVer != 0;
+        assert cntr != CacheCoordinatorsProcessor.COUNTER_NA;
+
         synchronized (this) {
-            MvccCounter cntr = new MvccCounter(msg.coordinatorVersion(), msg.counter());
+            MvccCounter mvccCntr = new MvccCounter(crdVer, cntr);
 
             Map<MvccCounter, Integer> nodeQueries = activeQueries.get(nodeId);
 
             if (nodeQueries == null)
                 activeQueries.put(nodeId, nodeQueries = new HashMap<>());
 
-            Integer qryCnt = nodeQueries.get(cntr);
+            Integer qryCnt = nodeQueries.get(mvccCntr);
 
             int newQryCnt = (qryCnt != null ? qryCnt : 0) - 1;
 
             if (newQryCnt == 0) {
-                nodeQueries.remove(cntr);
+                nodeQueries.remove(mvccCntr);
 
                 if (nodeQueries.isEmpty()) {
                     activeQueries.remove(nodeId);
@@ -184,7 +188,7 @@ class PreviousCoordinatorQueries {
                 }
             }
             else
-                nodeQueries.put(cntr, newQryCnt);
+                nodeQueries.put(mvccCntr, newQryCnt);
         }
     }
 }

@@ -655,7 +655,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
             boolean block = true;
 
             @Override public boolean apply(ClusterNode node, Message msg) {
-                if (block && msg instanceof CoordinatorTxAckRequest) {
+                if (block && msg instanceof CoordinatorAckRequestTx) {
                     block = false;
 
                     return true;
@@ -991,7 +991,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
 
         clientSpi.closure(new IgniteBiInClosure<ClusterNode, Message>() {
             @Override public void apply(ClusterNode node, Message msg) {
-                if (msg instanceof CoordinatorTxAckRequest)
+                if (msg instanceof CoordinatorAckRequestTx)
                     doSleep(2000);
             }
         });
@@ -1110,7 +1110,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
             private boolean blocked;
 
             @Override public boolean apply(ClusterNode node, Message msg) {
-                if (!blocked && (msg instanceof CoordinatorTxAckRequest)) {
+                if (!blocked && (msg instanceof CoordinatorAckRequestTx)) {
                     blocked = true;
 
                     return true;
@@ -2055,7 +2055,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
 
         srvSpi.blockMessages(GridNearGetResponse.class, getTestIgniteInstanceName(1));
 
-        TestRecordingCommunicationSpi.spi(client).blockMessages(CoordinatorQueryAckRequest.class,
+        TestRecordingCommunicationSpi.spi(client).blockMessages(CoordinatorAckRequestQuery.class,
             getTestIgniteInstanceName(0));
 
         IgniteInternalFuture<?> fut = GridTestUtils.runAsync(new Callable<Void>() {

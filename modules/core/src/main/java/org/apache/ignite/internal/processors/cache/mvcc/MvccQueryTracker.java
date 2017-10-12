@@ -23,6 +23,7 @@ import org.apache.ignite.internal.IgniteInternalFuture;
 import org.apache.ignite.internal.cluster.ClusterTopologyCheckedException;
 import org.apache.ignite.internal.processors.affinity.AffinityTopologyVersion;
 import org.apache.ignite.internal.processors.cache.GridCacheContext;
+import org.apache.ignite.internal.processors.cache.GridCacheSharedContext;
 import org.apache.ignite.internal.util.tostring.GridToStringExclude;
 import org.apache.ignite.internal.util.typedef.internal.S;
 import org.apache.ignite.lang.IgniteInClosure;
@@ -113,6 +114,42 @@ public class MvccQueryTracker {
 
         if (mvccVer0 != null)
             cctx.shared().coordinators().ackQueryDone(mvccCrd0, mvccVer0);
+    }
+
+    public IgniteInternalFuture<Void> onTxFinish(@Nullable TxMvccInfo mvccInfo, GridCacheSharedContext ctx) {
+        MvccCoordinator mvccCrd0 = null;
+        MvccCoordinatorVersion mvccVer0 = null;
+
+        synchronized (this) {
+            if (mvccVer != null) {
+                assert mvccCrd != null;
+
+                mvccCrd0 = mvccCrd;
+                mvccVer0 = mvccVer;
+
+                mvccVer = null; // Mark as finished.
+            }
+        }
+
+        if (mvccVer0 != null) {
+            if (mvccInfo == null) {
+                cctx.shared().coordinators().ackQueryDone(mvccCrd0, mvccVer0);
+
+                return null;
+            }
+            else if (mvccInfo.coordinator().equals(mvccCrd0.nodeId()))
+                return ctx.coordinators().ackTxCommit(mvccInfo.coordinator(), mvccInfo.version(), mvccVer0);
+            else {
+                cctx.shared().coordinators().ackQueryDone(mvccCrd0, mvccVer0);
+
+                return ctx.coordinators().ackTxCommit(mvccInfo.coordinator(), mvccInfo.version(), null);
+            }
+        }
+
+        if (mvccInfo != null)
+            return ctx.coordinators().ackTxCommit(mvccInfo.coordinator(), mvccInfo.version(), null);
+
+        return null;
     }
 
     /**

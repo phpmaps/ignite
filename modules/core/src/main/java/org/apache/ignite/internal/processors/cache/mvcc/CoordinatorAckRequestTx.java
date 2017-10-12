@@ -18,69 +18,93 @@
 package org.apache.ignite.internal.processors.cache.mvcc;
 
 import java.nio.ByteBuffer;
+import org.apache.ignite.internal.managers.communication.GridIoMessageFactory;
 import org.apache.ignite.internal.util.typedef.internal.S;
-import org.apache.ignite.plugin.extensions.communication.Message;
 import org.apache.ignite.plugin.extensions.communication.MessageReader;
 import org.apache.ignite.plugin.extensions.communication.MessageWriter;
 
 /**
  *
  */
-public class MvccCounter implements Message {
+public class CoordinatorAckRequestTx implements MvccCoordinatorMessage {
     /** */
-    private long crdVer;
+    private static final long serialVersionUID = 0L;
 
     /** */
-    private long cntr;
+    private static final int SKIP_RESPONSE_FLAG_MASK = 0x01;
+
+    /** */
+    private long futId;
+
+    /** */
+    private long txCntr;
+
+    /** */
+    private byte flags;
 
     /**
-     *
+     * Required by {@link GridIoMessageFactory}.
      */
-    public MvccCounter() {
-        // No-po.
+    public CoordinatorAckRequestTx() {
+        // No-op.
     }
 
     /**
-     * @param crdVer Coordinator version.
-     * @param cntr Counter.
+     * @param futId Future ID.
+     * @param txCntr Counter assigned to transaction.
      */
-    public MvccCounter(long crdVer, long cntr) {
-        this.crdVer = crdVer;
-        this.cntr = cntr;
+    CoordinatorAckRequestTx(long futId, long txCntr) {
+        this.futId = futId;
+        this.txCntr = txCntr;
     }
 
-    /**
-     * @return Coordinator version.
-     */
-    public long coordinatorVersion() {
-        return crdVer;
+    long queryCounter() {
+        return CacheCoordinatorsProcessor.COUNTER_NA;
     }
 
-    /**
-     * @return Counter.
-     */
-    public long counter() {
-        return cntr;
+    long queryCoordinatorVersion() {
+        return 0;
     }
 
     /** {@inheritDoc} */
-    @Override public boolean equals(Object o) {
-        if (this == o)
-            return true;
-
-        if (o == null || getClass() != o.getClass())
-            return false;
-
-        MvccCounter that = (MvccCounter) o;
-
-        return crdVer == that.crdVer && cntr == that.cntr;
+    @Override public boolean waitForCoordinatorInit() {
+        return false;
     }
 
     /** {@inheritDoc} */
-    @Override public int hashCode() {
-        int res = (int) (crdVer ^ (crdVer >>> 32));
-        res = 31 * res + (int) (cntr ^ (cntr >>> 32));
-        return res;
+    @Override public boolean processedFromNioThread() {
+        return true;
+    }
+
+    /**
+     * @return Future ID.
+     */
+    long futureId() {
+        return futId;
+    }
+
+    /**
+     * @return {@code True} if response message is not needed.
+     */
+    boolean skipResponse() {
+        return (flags & SKIP_RESPONSE_FLAG_MASK) != 0;
+    }
+
+    /**
+     * @param val {@code True} if response message is not needed.
+     */
+    void skipResponse(boolean val) {
+        if (val)
+            flags |= SKIP_RESPONSE_FLAG_MASK;
+        else
+            flags &= ~SKIP_RESPONSE_FLAG_MASK;
+    }
+
+    /**
+     * @return Counter assigned tp transaction.
+     */
+    public long txCounter() {
+        return txCntr;
     }
 
     /** {@inheritDoc} */
@@ -96,13 +120,19 @@ public class MvccCounter implements Message {
 
         switch (writer.state()) {
             case 0:
-                if (!writer.writeLong("cntr", cntr))
+                if (!writer.writeByte("flags", flags))
                     return false;
 
                 writer.incrementState();
 
             case 1:
-                if (!writer.writeLong("crdVer", crdVer))
+                if (!writer.writeLong("futId", futId))
+                    return false;
+
+                writer.incrementState();
+
+            case 2:
+                if (!writer.writeLong("txCntr", txCntr))
                     return false;
 
                 writer.incrementState();
@@ -121,7 +151,7 @@ public class MvccCounter implements Message {
 
         switch (reader.state()) {
             case 0:
-                cntr = reader.readLong("cntr");
+                flags = reader.readByte("flags");
 
                 if (!reader.isLastRead())
                     return false;
@@ -129,7 +159,15 @@ public class MvccCounter implements Message {
                 reader.incrementState();
 
             case 1:
-                crdVer = reader.readLong("crdVer");
+                futId = reader.readLong("futId");
+
+                if (!reader.isLastRead())
+                    return false;
+
+                reader.incrementState();
+
+            case 2:
+                txCntr = reader.readLong("txCntr");
 
                 if (!reader.isLastRead())
                     return false;
@@ -138,17 +176,17 @@ public class MvccCounter implements Message {
 
         }
 
-        return reader.afterMessageRead(MvccCounter.class);
+        return reader.afterMessageRead(CoordinatorAckRequestTx.class);
     }
 
     /** {@inheritDoc} */
     @Override public short directType() {
-        return 143;
+        return 131;
     }
 
     /** {@inheritDoc} */
     @Override public byte fieldsCount() {
-        return 2;
+        return 3;
     }
 
     /** {@inheritDoc} */
@@ -158,6 +196,6 @@ public class MvccCounter implements Message {
 
     /** {@inheritDoc} */
     @Override public String toString() {
-        return S.toString(MvccCounter.class, this);
+        return S.toString(CoordinatorAckRequestTx.class, this);
     }
 }

@@ -18,42 +18,43 @@
 package org.apache.ignite.internal.processors.cache.mvcc;
 
 import java.nio.ByteBuffer;
+import org.apache.ignite.internal.managers.communication.GridIoMessageFactory;
 import org.apache.ignite.internal.util.typedef.internal.S;
-import org.apache.ignite.plugin.extensions.communication.Message;
 import org.apache.ignite.plugin.extensions.communication.MessageReader;
 import org.apache.ignite.plugin.extensions.communication.MessageWriter;
 
 /**
  *
  */
-public class MvccCounter implements Message {
+public class CoordinatorAckRequestQuery implements MvccCoordinatorMessage {
     /** */
-    private long crdVer;
+    private static final long serialVersionUID = 0L;
 
     /** */
     private long cntr;
 
     /**
-     *
+     * Required by {@link GridIoMessageFactory}.
      */
-    public MvccCounter() {
-        // No-po.
+    public CoordinatorAckRequestQuery() {
+        // No-op.
     }
 
     /**
-     * @param crdVer Coordinator version.
-     * @param cntr Counter.
+     * @param cntr Query counter.
      */
-    public MvccCounter(long crdVer, long cntr) {
-        this.crdVer = crdVer;
+    CoordinatorAckRequestQuery(long cntr) {
         this.cntr = cntr;
     }
 
-    /**
-     * @return Coordinator version.
-     */
-    public long coordinatorVersion() {
-        return crdVer;
+    /** {@inheritDoc} */
+    @Override public boolean waitForCoordinatorInit() {
+        return false;
+    }
+
+    /** {@inheritDoc} */
+    @Override public boolean processedFromNioThread() {
+        return true;
     }
 
     /**
@@ -61,26 +62,6 @@ public class MvccCounter implements Message {
      */
     public long counter() {
         return cntr;
-    }
-
-    /** {@inheritDoc} */
-    @Override public boolean equals(Object o) {
-        if (this == o)
-            return true;
-
-        if (o == null || getClass() != o.getClass())
-            return false;
-
-        MvccCounter that = (MvccCounter) o;
-
-        return crdVer == that.crdVer && cntr == that.cntr;
-    }
-
-    /** {@inheritDoc} */
-    @Override public int hashCode() {
-        int res = (int) (crdVer ^ (crdVer >>> 32));
-        res = 31 * res + (int) (cntr ^ (cntr >>> 32));
-        return res;
     }
 
     /** {@inheritDoc} */
@@ -97,12 +78,6 @@ public class MvccCounter implements Message {
         switch (writer.state()) {
             case 0:
                 if (!writer.writeLong("cntr", cntr))
-                    return false;
-
-                writer.incrementState();
-
-            case 1:
-                if (!writer.writeLong("crdVer", crdVer))
                     return false;
 
                 writer.incrementState();
@@ -128,27 +103,19 @@ public class MvccCounter implements Message {
 
                 reader.incrementState();
 
-            case 1:
-                crdVer = reader.readLong("crdVer");
-
-                if (!reader.isLastRead())
-                    return false;
-
-                reader.incrementState();
-
         }
 
-        return reader.afterMessageRead(MvccCounter.class);
+        return reader.afterMessageRead(CoordinatorAckRequestQuery.class);
     }
 
     /** {@inheritDoc} */
     @Override public short directType() {
-        return 143;
+        return 134;
     }
 
     /** {@inheritDoc} */
     @Override public byte fieldsCount() {
-        return 2;
+        return 1;
     }
 
     /** {@inheritDoc} */
@@ -158,6 +125,6 @@ public class MvccCounter implements Message {
 
     /** {@inheritDoc} */
     @Override public String toString() {
-        return S.toString(MvccCounter.class, this);
+        return S.toString(CoordinatorAckRequestQuery.class, this);
     }
 }
