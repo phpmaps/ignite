@@ -76,11 +76,14 @@ import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtLocalP
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtPartitionState;
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtPartitionTopology;
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtTopologyFutureAdapter;
+import org.apache.ignite.internal.processors.cache.distributed.near.GridNearTxLocal;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinator;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorVersion;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCounter;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccQueryAware;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccQueryTracker;
 import org.apache.ignite.internal.processors.cache.persistence.snapshot.SnapshotDiscoveryMessage;
+import org.apache.ignite.internal.processors.cache.transactions.IgniteInternalTx;
 import org.apache.ignite.internal.processors.cache.transactions.IgniteTxKey;
 import org.apache.ignite.internal.processors.cache.version.GridCacheVersion;
 import org.apache.ignite.internal.processors.cluster.ChangeGlobalStateFinishMessage;
@@ -657,7 +660,7 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
                 }
             }
 
-            updateTopologies(crdNode, cctx.coordinators().currentCoordinator());
+            updateTopologies(crd, crdNode, cctx.coordinators().currentCoordinator());
 
             switch (exchange) {
                 case ALL: {
@@ -760,11 +763,12 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
     }
 
     /**
+     * @param exchCrd Exchange coordinator node.
      * @param crd Coordinator flag.
      * @param mvccCrd Mvcc coordinator.
      * @throws IgniteCheckedException If failed.
      */
-    private void updateTopologies(boolean crd, MvccCoordinator mvccCrd) throws IgniteCheckedException {
+    private void updateTopologies(ClusterNode exchCrd, boolean crd, MvccCoordinator mvccCrd) throws IgniteCheckedException {
         for (CacheGroupContext grp : cctx.cache().cacheGroups()) {
             if (grp.isLocal())
                 continue;
@@ -813,7 +817,19 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
                     processMvccCoordinatorChange(mvccCrd, (MvccQueryAware)fut, activeQrys);
             }
 
+            for (IgniteInternalTx tx : cctx.tm().activeTransactions()) {
+                if (tx instanceof GridNearTxLocal) {
+                    MvccQueryTracker qryTracker = ((GridNearTxLocal)tx).mvccQueryTracker();
+
+                    if (qryTracker != null)
+                        processMvccCoordinatorChange(mvccCrd, qryTracker, activeQrys);
+                }
+            }
+
             exchCtx.addActiveQueries(cctx.localNodeId(), activeQrys);
+
+            if (exchCrd == null || !mvccCrd.nodeId().equals(exchCrd.id()))
+                cctx.coordinators().sendActiveQueries(mvccCrd.nodeId(), activeQrys);
         }
     }
 
@@ -824,8 +840,7 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
      */
     private void processMvccCoordinatorChange(MvccCoordinator mvccCrd,
         MvccQueryAware qryAware,
-        Map<MvccCounter, Integer> activeQrys
-        )
+        Map<MvccCounter, Integer> activeQrys)
     {
         MvccCoordinatorVersion ver = qryAware.onMvccCoordinatorChange(mvccCrd);
 
@@ -1300,9 +1315,11 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
                 msg.partitionHistoryCounters(partHistReserved0);
         }
 
-        Map<UUID, Map<MvccCounter, Integer>> activeQueries = exchCtx.activeQueries();
+        if (exchCtx.newMvccCoordinator() && cctx.coordinators().currentCoordinatorId().equals(node.id())) {
+            Map<UUID, Map<MvccCounter, Integer>> activeQueries = exchCtx.activeQueries();
 
-        msg.activeQueries(activeQueries != null ? activeQueries.get(cctx.localNodeId()) : null);
+            msg.activeQueries(activeQueries != null ? activeQueries.get(cctx.localNodeId()) : null);
+        }
 
         if (stateChangeExchange() && changeGlobalStateE != null)
             msg.setError(changeGlobalStateE);

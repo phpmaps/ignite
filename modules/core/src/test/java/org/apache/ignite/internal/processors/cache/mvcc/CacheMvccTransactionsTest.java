@@ -32,6 +32,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.ignite.Ignite;
@@ -406,7 +407,91 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
     /**
      * @throws Exception If failed.
      */
-    public void testSimplePutGetAll() throws Exception {
+    public void testTxReadSnapshotSimple() throws Exception {
+        Ignite srv0 = startGrids(4);
+
+        client = true;
+
+        startGrid(4);
+
+        for (CacheConfiguration ccfg : cacheConfigurations()) {
+            IgniteCache<Object, Object> cache0 = srv0.createCache(ccfg);
+
+            final Map<Integer, Integer> startVals = new HashMap<>();
+
+            final int KEYS = 10;
+
+            for (int i = 0; i < KEYS; i++)
+                startVals.put(i, 0);
+
+            for (final Ignite node : G.allGrids()) {
+                info("Test node: " + node.name());
+
+                try (Transaction tx = srv0.transactions().txStart(PESSIMISTIC, REPEATABLE_READ)) {
+                    cache0.putAll(startVals);
+
+                    tx.commit();
+                }
+
+                final CountDownLatch readStart = new CountDownLatch(1);
+
+                final CountDownLatch readProceed = new CountDownLatch(1);
+
+                IgniteInternalFuture fut = GridTestUtils.runAsync(new Callable<Void>() {
+                    @Override public Void call() throws Exception {
+                        IgniteCache<Object, Object> cache = node.cache(DEFAULT_CACHE_NAME);
+
+                        try (Transaction tx = node.transactions().txStart(OPTIMISTIC, SERIALIZABLE)) {
+                            assertEquals(0, cache.get(0));
+
+                            readStart.countDown();
+
+                            assertTrue(readProceed.await(5, TimeUnit.SECONDS));
+
+                            assertEquals(0, cache.get(1));
+
+                            assertEquals(0, cache.get(2));
+
+                            Map<Object, Object> res = cache.getAll(startVals.keySet());
+
+                            assertEquals(startVals.size(), res.size());
+
+                            for (Map.Entry<Object, Object> e : res.entrySet())
+                                assertEquals("Invalid value for key: " + e.getKey(), 0, e.getValue());
+
+                            tx.rollback();
+                        }
+
+                        return null;
+                    }
+                });
+
+                assertTrue(readStart.await(5, TimeUnit.SECONDS));
+
+                for (int i = 0; i < KEYS; i++) {
+                    try (Transaction tx = srv0.transactions().txStart(PESSIMISTIC, REPEATABLE_READ)) {
+                        if (i % 2 == 0)
+                            cache0.put(i, 1);
+                        else
+                            cache0.remove(i);
+
+                        tx.commit();
+                    }
+                }
+
+                readProceed.countDown();
+
+                fut.get();
+            }
+
+            srv0.destroyCache(cache0.getName());
+        }
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testPutGetAllSimple() throws Exception {
         Ignite node = startGrid(0);
 
         IgniteTransactions txs = node.transactions();
@@ -465,22 +550,22 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
     /**
      * @throws Exception If failed.
      */
-    public void testSimplePutRemove() throws Exception {
-        simplePutRemove(false);
+    public void testPutRemoveSimple() throws Exception {
+        putRemoveSimple(false);
     }
 
     /**
      * @throws Exception If failed.
      */
-    public void testSimplePutRemove_LargeKeys() throws Exception {
-        simplePutRemove(true);
+    public void testPutRemoveSimple_LargeKeys() throws Exception {
+        putRemoveSimple(true);
     }
 
     /**
      * @throws Exception If failed.
      * @param largeKeys {@code True} to use large keys (not fitting in single page).
      */
-    private void simplePutRemove(boolean largeKeys) throws Exception {
+    private void putRemoveSimple(boolean largeKeys) throws Exception {
         Ignite node = startGrid(0);
 
         IgniteTransactions txs = node.transactions();
@@ -881,9 +966,11 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
 
         for (boolean otherPuts : vals) {
             for (boolean putOnStart : vals) {
-                cleanupWaitsForGet1(otherPuts, putOnStart);
+                for (boolean inTx : vals) {
+                    cleanupWaitsForGet1(otherPuts, putOnStart, inTx);
 
-                afterTest();
+                    afterTest();
+                }
             }
         }
     }
@@ -891,10 +978,13 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
     /**
      * @param otherPuts {@code True} to update unrelated keys to increment mvcc counter.
      * @param putOnStart {@code True} to put data in cache before getAll.
+     * @param inTx {@code True} to read inside transaction.
      * @throws Exception If failed.
      */
-    private void cleanupWaitsForGet1(boolean otherPuts, final boolean putOnStart) throws Exception {
-        info("cleanupWaitsForGet [otherPuts=" + otherPuts + ", putOnStart=" + putOnStart + "]");
+    private void cleanupWaitsForGet1(boolean otherPuts, final boolean putOnStart, final boolean inTx) throws Exception {
+        info("cleanupWaitsForGet [otherPuts=" + otherPuts +
+            ", putOnStart=" + putOnStart +
+            ", inTx=" + inTx + "]");
 
         testSpi = true;
 
@@ -941,7 +1031,18 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
             @Override public Void call() throws Exception {
                 IgniteCache<Integer, Integer> cache = client.cache(srvCache.getName());
 
-                Map<Integer, Integer> vals = cache.getAll(F.asSet(key1, key2));
+
+                Map<Integer, Integer> vals;
+
+                if (inTx) {
+                    try (Transaction tx = client.transactions().txStart(OPTIMISTIC, SERIALIZABLE)) {
+                        vals = cache.getAll(F.asSet(key1, key2));
+
+                        tx.rollback();
+                    }
+                }
+                else
+                    vals = cache.getAll(F.asSet(key1, key2));
 
                 if (putOnStart) {
                     assertEquals(2, vals.size());
@@ -1713,8 +1814,29 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
     /**
      * @throws Exception If failed.
      */
+    public void testPessimisticTxReadsSnapshot_ClientServer() throws Exception {
+        txReadsSnapshot(4, 2, 1, 64, true);
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testOptimisticTxReadsSnapshot_SingleNode() throws Exception {
+        txReadsSnapshot(1, 0, 0, 64, false);
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
     public void testOptimisticTxReadsSnapshot_SingleNode_SinglePartition() throws Exception {
         txReadsSnapshot(1, 0, 0, 1, false);
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testOptimisticTxReadsSnapshot_ClientServer() throws Exception {
+        txReadsSnapshot(4, 2, 1, 64, false);
     }
 
     /**
@@ -1834,7 +1956,6 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
                                 int remaining = ACCOUNTS;
 
                                 do {
-                                    // TODO IGNITE-3478: add single get usage.
                                     int readCnt = rnd.nextInt(remaining) + 1;
 
                                     Set<Integer> readKeys = new TreeSet<>();
@@ -1866,16 +1987,29 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
                                 do {
                                     int readCnt = rnd.nextInt(remaining) + 1;
 
-                                    Set<Integer> readKeys = new LinkedHashSet<>();
+                                    if (rnd.nextInt(3) == 0) {
+                                        for (int i = 0; i < readCnt; i++) {
+                                            Integer key = rnd.nextInt(ACCOUNTS);
 
-                                    for (int i = 0; i < readCnt; i++)
-                                        readKeys.add(rnd.nextInt(ACCOUNTS));
+                                            MvccTestAccount account = cache.get(key);
 
-                                    Map<Integer, MvccTestAccount> readRes = cache.getAll(readKeys);
+                                            assertNotNull(account);
 
-                                    assertEquals(readKeys.size(), readRes.size());
+                                            accounts.put(key, account);
+                                        }
+                                    }
+                                    else {
+                                        Set<Integer> readKeys = new LinkedHashSet<>();
 
-                                    accounts.putAll(readRes);
+                                        for (int i = 0; i < readCnt; i++)
+                                            readKeys.add(rnd.nextInt(ACCOUNTS));
+
+                                        Map<Integer, MvccTestAccount> readRes = cache.getAll(readKeys);
+
+                                        assertEquals(readKeys.size(), readRes.size());
+
+                                        accounts.putAll(readRes);
+                                    }
 
                                     remaining = ACCOUNTS - accounts.size();
                                 }
@@ -2119,7 +2253,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
     /**
      * @throws Exception If failed.
      */
-    public void testSimpleRebalance() throws Exception {
+    public void testRebalanceSimple() throws Exception {
         Ignite srv0 = startGrid(0);
 
         IgniteCache<Integer, Integer> cache =  (IgniteCache)srv0.createCache(
@@ -2182,7 +2316,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
     /**
      * @throws Exception If failed.
      */
-    public void testSimpleRebalanceWithRemovedValues() throws Exception {
+    public void testRebalanceWithRemovedValuesSimple() throws Exception {
         Ignite node = startGrid(0);
 
         IgniteTransactions txs = node.transactions();
@@ -2462,32 +2596,109 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
     /**
      * @throws Exception If failed.
      */
-    public void testReadInProgressCoordinatorFailsSimple_FromServer() throws Exception {
-        for (int i = 1; i <= 3; i++) {
-            readInProgressCoordinatorFailsSimple(false, i);
+    public void testTxInProgressCoordinatorChangeSimple() throws Exception {
+        txInProgressCoordinatorChangeSimple(false);
+    }
 
-            afterTest();
+    /**
+     * @throws Exception If failed.
+     */
+    public void testTxInProgressCoordinatorChangeSimple_Readonly() throws Exception {
+        txInProgressCoordinatorChangeSimple(true);
+    }
+
+    /**
+     * @param readOnly If {@code true} tests read-only transaction.
+     * @throws Exception If failed.
+     */
+    private void txInProgressCoordinatorChangeSimple(boolean readOnly) throws Exception {
+        CacheCoordinatorsProcessor.coordinatorAssignClosure(new CoordinatorAssignClosure());
+
+        Ignite srv0 = startGrids(4);
+
+        client = true;
+
+        startGrid(4);
+
+        client = false;
+
+        nodeAttr = CRD_ATTR;
+
+        int crdIdx = 5;
+
+        startGrid(crdIdx);
+
+        srv0.createCache(cacheConfiguration(PARTITIONED, FULL_SYNC, 0, DFLT_PARTITION_COUNT).
+            setNodeFilter(new CoordinatorNodeFilter()));
+
+        Set<Integer> keys = F.asSet(1, 2, 3);
+
+        for (int i = 0; i < 5; i++) {
+            Ignite node = ignite(i);
+
+            info("Test with node: " + node.name());
+
+            IgniteCache cache = node.cache(DEFAULT_CACHE_NAME);
+
+            try (Transaction tx = node.transactions().txStart(OPTIMISTIC, SERIALIZABLE)) {
+                assertTrue(cache.getAll(keys).isEmpty());
+
+                if (!readOnly)
+                    cache.put(0, 0);
+
+                startGrid(crdIdx + 1);
+
+                stopGrid(crdIdx);
+
+                crdIdx++;
+
+                tx.commit();
+            }
+
+            checkActiveQueriesCleanup(ignite(crdIdx));
         }
+    }
+    
+    /**
+     * @throws Exception If failed.
+     */
+    public void testReadInProgressCoordinatorFailsSimple_FromServer() throws Exception {
+        readInProgressCoordinatorFailsSimple(false);
     }
 
     /**
      * @throws Exception If failed.
      */
     public void testReadInProgressCoordinatorFailsSimple_FromClient() throws Exception {
-        for (int i = 1; i <= 3; i++) {
-            readInProgressCoordinatorFailsSimple(true, i);
+        readInProgressCoordinatorFailsSimple(true);
+    }
 
-            afterTest();
+    /**
+     * @param fromClient {@code True} if read from client node, otherwise from server node.
+     * @throws Exception If failed.
+     */
+    private void readInProgressCoordinatorFailsSimple(boolean fromClient) throws Exception {
+        for (boolean readInTx : new boolean[]{false, true}) {
+            for (int i = 1; i <= 3; i++) {
+                readInProgressCoordinatorFailsSimple(fromClient, i, readInTx);
+
+                afterTest();
+            }
         }
     }
 
     /**
      * @param fromClient {@code True} if read from client node, otherwise from server node.
      * @param crdChangeCnt Number of coordinator changes.
+     * @param readInTx {@code True} to read inside transaction.
      * @throws Exception If failed.
      */
-    private void readInProgressCoordinatorFailsSimple(boolean fromClient, int crdChangeCnt) throws Exception {
-        info("readInProgressCoordinatorFailsSimple [fromClient=" + fromClient + ", crdChangeCnt=" + crdChangeCnt + ']');
+    private void readInProgressCoordinatorFailsSimple(boolean fromClient, int crdChangeCnt, final boolean readInTx)
+        throws Exception
+    {
+        info("readInProgressCoordinatorFailsSimple [fromClient=" + fromClient +
+            ", crdChangeCnt=" + crdChangeCnt +
+            ", readInTx=" + readInTx + ']');
 
         testSpi = true;
 
@@ -2540,7 +2751,17 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
 
         IgniteInternalFuture getFut = GridTestUtils.runAsync(new Callable() {
             @Override public Object call() throws Exception {
-                Map<Integer, Integer> res = cache.getAll(keys);
+                Map<Integer, Integer> res;
+
+                if (readInTx) {
+                    try (Transaction tx = getNode.transactions().txStart(OPTIMISTIC, SERIALIZABLE)) {
+                        res = cache.getAll(keys);
+
+                        tx.rollback();
+                    }
+                }
+                else
+                    res = cache.getAll(keys);
 
                 assertEquals(20, res.size());
 
@@ -2936,7 +3157,19 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
         for (int i = 0; i < 10; i++)
             vals.put(i, val);
 
-        try (Transaction tx = putNode.transactions().txStart(PESSIMISTIC, REPEATABLE_READ)) {
+        TransactionConcurrency concurrency;
+        TransactionIsolation isolation;
+
+        if (ThreadLocalRandom.current().nextBoolean()) {
+            concurrency = PESSIMISTIC;
+            isolation = REPEATABLE_READ;
+        }
+        else {
+            concurrency = OPTIMISTIC;
+            isolation = SERIALIZABLE;
+        }
+
+        try (Transaction tx = putNode.transactions().txStart(concurrency, isolation)) {
             for (String cacheName : cacheNames)
                 putNode.cache(cacheName).putAll(vals);
 
@@ -2993,7 +3226,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
         MvccCoordinator crd = null;
 
         for (Ignite node : G.allGrids()) {
-            CacheCoordinatorsProcessor crdProc = ((IgniteKernal) node).context().cache().context().coordinators();
+            CacheCoordinatorsProcessor crdProc = ((IgniteKernal)node).context().cache().context().coordinators();
 
             MvccCoordinator crd0 = crdProc.currentCoordinator();
 
@@ -3845,6 +4078,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
      *
      */
     static class CoordinatorAssignClosure implements IgniteClosure<Collection<ClusterNode>, ClusterNode> {
+        /** {@inheritDoc} */
         @Override public ClusterNode apply(Collection<ClusterNode> clusterNodes) {
             for (ClusterNode node : clusterNodes) {
                 if (node.attribute(CRD_ATTR) != null) {

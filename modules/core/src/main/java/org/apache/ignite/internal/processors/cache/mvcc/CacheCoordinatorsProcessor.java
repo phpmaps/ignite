@@ -471,6 +471,12 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
         return fut;
     }
 
+    /**
+     * @param futId Future ID.
+     * @param updateVer Update version.
+     * @param readVer Optional read version.
+     * @return Message.
+     */
     private CoordinatorAckRequestTx createTxAckMessage(long futId,
         MvccCoordinatorVersion updateVer,
         @Nullable MvccCoordinatorVersion readVer)
@@ -952,6 +958,7 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
     }
 
     /**
+     * @param nodeId Node ID.
      * @param msg Message.
      */
     private void processCoordinatorWaitTxsRequest(final UUID nodeId, final CoordinatorWaitTxsRequest msg) {
@@ -999,8 +1006,8 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
     }
 
     /**
-     * @param nodeId
-     * @param msg
+     * @param nodeId Node ID.
+     * @param msg Message.
      */
     private void sendFutureResponse(UUID nodeId, CoordinatorWaitTxsRequest msg) {
         try {
@@ -1019,18 +1026,21 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
     }
 
     /**
-     * @return
+     * @return Coordinator.
      */
     public MvccCoordinator currentCoordinator() {
         return curCrd;
     }
 
+    /**
+     * @param curCrd Coordinator.
+     */
     public void currentCoordinator(MvccCoordinator curCrd) {
         this.curCrd = curCrd;
     }
 
     /**
-     * @return
+     * @return Current coordinator node ID.
      */
     public UUID currentCoordinatorId() {
         MvccCoordinator curCrd = this.curCrd;
@@ -1059,6 +1069,13 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
     public void processClientActiveQueries(UUID nodeId,
         @Nullable Map<MvccCounter, Integer> activeQueries) {
         prevCrdQueries.processClientActiveQueries(nodeId, activeQueries);
+    }
+
+    /**
+     * @param activeQueries
+     */
+    public void sendActiveQueries(UUID nodeId, @Nullable Map<MvccCounter, Integer> activeQueries) {
+
     }
 
     /**

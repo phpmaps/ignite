@@ -237,7 +237,7 @@ public class GridNearTxLocal extends GridDhtTxLocalAdapter implements GridTimeou
             trackTimeout = cctx.time().addTimeoutObject(this);
     }
 
-    MvccQueryTracker mvccQueryTracker() {
+    public MvccQueryTracker mvccQueryTracker() {
         return mvccTracker;
     }
 

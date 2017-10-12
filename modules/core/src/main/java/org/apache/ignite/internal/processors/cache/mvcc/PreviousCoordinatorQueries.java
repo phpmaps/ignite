@@ -51,11 +51,11 @@ class PreviousCoordinatorQueries {
     private boolean initDone;
 
     /**
-     * @param srvNodesQueries Active queries started on server nodes.
+     * @param nodeQueries Active queries map.
      * @param discoCache Discovery data.
      * @param mgr Discovery manager.
      */
-    void init(Map<UUID, Map<MvccCounter, Integer>> srvNodesQueries, DiscoCache discoCache, GridDiscoveryManager mgr) {
+    void init(Map<UUID, Map<MvccCounter, Integer>> nodeQueries, DiscoCache discoCache, GridDiscoveryManager mgr) {
         synchronized (this) {
             assert !initDone;
             assert waitNodes == null;
@@ -63,14 +63,16 @@ class PreviousCoordinatorQueries {
             waitNodes = new HashSet<>();
 
             for (ClusterNode node : discoCache.allNodes()) {
-                if (CU.clientNode(node) && mgr.alive(node) && !F.contains(rcvd, node.id()))
+                if ((nodeQueries == null || !nodeQueries.containsKey(node.id())) &&
+                    mgr.alive(node) &&
+                    !F.contains(rcvd, node.id()))
                     waitNodes.add(node.id());
             }
 
             initDone = waitNodes.isEmpty();
 
-            if (srvNodesQueries != null) {
-                for (Map.Entry<UUID, Map<MvccCounter, Integer>> e : srvNodesQueries.entrySet())
+            if (nodeQueries != null) {
+                for (Map.Entry<UUID, Map<MvccCounter, Integer>> e : nodeQueries.entrySet())
                     addAwaitedActiveQueries(e.getKey(), e.getValue());
             }
 

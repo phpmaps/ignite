@@ -237,7 +237,8 @@ public class GridPartitionedSingleGetFuture extends GridCacheFutureAdapter<Objec
                 taskName == null ? 0 : taskName.hashCode(),
                 expiryPlc,
                 skipVals,
-                recovery);
+                recovery,
+                mvccVer);
 
             final Collection<Integer> invalidParts = fut.invalidPartitions();
 
@@ -282,7 +283,6 @@ public class GridPartitionedSingleGetFuture extends GridCacheFutureAdapter<Objec
                 cctx.mvcc().addFuture(this, futId);
             }
 
-            // TODO IGNITE-3478.
             GridCacheMessage req = new GridNearSingleGetRequest(cctx.cacheId(),
                 futId.localId(),
                 key,
@@ -296,7 +296,8 @@ public class GridPartitionedSingleGetFuture extends GridCacheFutureAdapter<Objec
                 /*add reader*/false,
                 needVer,
                 cctx.deploymentEnabled(),
-                recovery);
+                recovery,
+                mvccVer);
 
             try {
                 cctx.io().send(node, req, cctx.ioPolicy());
