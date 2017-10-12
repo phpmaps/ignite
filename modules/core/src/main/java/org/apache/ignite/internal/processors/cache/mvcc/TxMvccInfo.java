@@ -42,8 +42,8 @@ public class TxMvccInfo implements Message {
     }
 
     /**
-     * @param crd
-     * @param mvccVer
+     * @param crd Coordinator node ID.
+     * @param mvccVer Mvcc version.
      */
     public TxMvccInfo(UUID crd, MvccCoordinatorVersion mvccVer) {
         assert crd != null;
@@ -53,10 +53,16 @@ public class TxMvccInfo implements Message {
         this.mvccVer = mvccVer;
     }
 
-    public UUID coordinator() {
+    /**
+     * @return Coordinator node ID.
+     */
+    public UUID coordinatorNodeId() {
         return crd;
     }
 
+    /**
+     * @return Mvcc version.
+     */
     public MvccCoordinatorVersion version() {
         return mvccVer;
     }

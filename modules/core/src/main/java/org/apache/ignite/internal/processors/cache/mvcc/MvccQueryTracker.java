@@ -116,7 +116,13 @@ public class MvccQueryTracker {
             cctx.shared().coordinators().ackQueryDone(mvccCrd0, mvccVer0);
     }
 
-    public IgniteInternalFuture<Void> onTxFinish(@Nullable TxMvccInfo mvccInfo, GridCacheSharedContext ctx) {
+    /**
+     * @param mvccInfo Mvcc update info.
+     * @param ctx Context.
+     * @param commit If {@code true} ack commit, otherwise rollback.
+     * @return Commit ack future.
+     */
+    public IgniteInternalFuture<Void> onTxDone(@Nullable TxMvccInfo mvccInfo, GridCacheSharedContext ctx, boolean commit) {
         MvccCoordinator mvccCrd0 = null;
         MvccCoordinatorVersion mvccVer0 = null;
 
@@ -131,23 +137,21 @@ public class MvccQueryTracker {
             }
         }
 
-        if (mvccVer0 != null) {
+        assert mvccVer0 == null || mvccInfo == null || mvccInfo.coordinatorNodeId().equals(mvccCrd0.nodeId());
+
+        if (mvccVer0 != null || mvccInfo != null) {
             if (mvccInfo == null) {
                 cctx.shared().coordinators().ackQueryDone(mvccCrd0, mvccVer0);
 
                 return null;
             }
-            else if (mvccInfo.coordinator().equals(mvccCrd0.nodeId()))
-                return ctx.coordinators().ackTxCommit(mvccInfo.coordinator(), mvccInfo.version(), mvccVer0);
             else {
-                cctx.shared().coordinators().ackQueryDone(mvccCrd0, mvccVer0);
-
-                return ctx.coordinators().ackTxCommit(mvccInfo.coordinator(), mvccInfo.version(), null);
+                if (commit)
+                    return ctx.coordinators().ackTxCommit(mvccInfo.coordinatorNodeId(), mvccInfo.version(), null);
+                else
+                    ctx.coordinators().ackTxRollback(mvccInfo.coordinatorNodeId(), mvccInfo.version(), null);
             }
         }
-
-        if (mvccInfo != null)
-            return ctx.coordinators().ackTxCommit(mvccInfo.coordinator(), mvccInfo.version(), null);
 
         return null;
     }

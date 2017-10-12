@@ -42,6 +42,7 @@ import org.apache.ignite.internal.processors.cache.GridCacheSharedContext;
 import org.apache.ignite.internal.processors.cache.distributed.GridDistributedTxMapping;
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtTxFinishRequest;
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtTxFinishResponse;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccQueryTracker;
 import org.apache.ignite.internal.processors.cache.mvcc.TxMvccInfo;
 import org.apache.ignite.internal.processors.cache.transactions.IgniteInternalTx;
 import org.apache.ignite.internal.processors.cache.transactions.IgniteTxEntry;
@@ -403,6 +404,20 @@ public final class GridNearTxFinishFuture<K, V> extends GridCacheCompoundIdentit
             fut.getClass() == CheckRemoteTxMiniFuture.class;
     }
 
+    /**
+     *
+     */
+    private void ackMvccCoordinatorOnRollback() {
+        TxMvccInfo mvccInfo = tx.mvccInfo();
+
+        MvccQueryTracker qryTracker = tx.mvccQueryTracker();
+
+        if (qryTracker != null)
+            qryTracker.onTxDone(mvccInfo, cctx, false);
+        else if (mvccInfo != null)
+            cctx.coordinators().ackTxRollback(mvccInfo.coordinatorNodeId(), mvccInfo.version(), null);
+    }
+
     /** {@inheritDoc} */
     @SuppressWarnings("ForLoopReplaceableByForEach")
     public void finish(boolean commit, boolean clearThreadMap) {
@@ -421,11 +436,8 @@ public final class GridNearTxFinishFuture<K, V> extends GridCacheCompoundIdentit
             return;
         }
 
-        if (!commit && tx.mvccInfo() != null) {
-            TxMvccInfo mvccInfo = tx.mvccInfo();
-
-            cctx.coordinators().ackTxRollback(mvccInfo.coordinator(), mvccInfo.version());
-        }
+        if (!commit)
+            ackMvccCoordinatorOnRollback();
 
         try {
             if (tx.localFinish(commit, clearThreadMap) || (!commit && tx.state() == UNKNOWN)) {
@@ -436,7 +448,8 @@ public final class GridNearTxFinishFuture<K, V> extends GridCacheCompoundIdentit
 
                     assert mvccInfo != null;
 
-                    IgniteInternalFuture fut = cctx.coordinators().waitTxsFuture(mvccInfo.coordinator(), waitTxs);
+                    IgniteInternalFuture fut = cctx.coordinators().waitTxsFuture(mvccInfo.coordinatorNodeId(),
+                        waitTxs);
 
                     add(fut);
                 }

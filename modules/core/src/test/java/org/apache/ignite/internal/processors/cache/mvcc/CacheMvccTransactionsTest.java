@@ -336,6 +336,21 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
      * @throws Exception If failed.
      */
     public void testActiveQueriesCleanup() throws Exception {
+        activeQueriesCleanup(false);
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testActiveQueriesCleanupTx() throws Exception {
+        activeQueriesCleanup(true);
+    }
+
+    /**
+     * @param tx If {@code true} tests reads inside transaction.
+     * @throws Exception If failed.
+     */
+    private void activeQueriesCleanup(final boolean tx) throws Exception {
         startGridsMultiThreaded(SRVS);
 
         client = true;
@@ -354,7 +369,11 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
             @Override public void apply(Integer idx) {
                 ThreadLocalRandom rnd = ThreadLocalRandom.current();
 
-                IgniteCache cache = ignite(idx % NODES).cache(DEFAULT_CACHE_NAME);
+                Ignite node = ignite(idx % NODES);
+
+                IgniteTransactions txs = node.transactions();
+
+                IgniteCache cache = node.cache(DEFAULT_CACHE_NAME);
 
                 while (System.currentTimeMillis() < stopTime) {
                     int keyCnt = rnd.nextInt(10) + 1;
@@ -364,7 +383,18 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
                     for (int i = 0; i < keyCnt; i++)
                         keys.add(rnd.nextInt());
 
-                    cache.getAll(keys);
+                    if (tx) {
+                        try (Transaction tx = txs.txStart(OPTIMISTIC, SERIALIZABLE)) {
+                            cache.getAll(keys);
+
+                            if (rnd.nextBoolean())
+                                tx.commit();
+                            else
+                                tx.rollback();
+                        }
+                    }
+                    else
+                        cache.getAll(keys);
                 }
             }
         }, NODES * 2, "get-thread");

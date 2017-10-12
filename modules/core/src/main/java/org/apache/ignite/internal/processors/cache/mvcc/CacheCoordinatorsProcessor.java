@@ -454,25 +454,7 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
 
         ackFuts.put(fut.id, fut);
 
-        MvccCoordinatorMessage msg;
-
-        if (readVer != null) {
-            long trackCntr = queryTrackCounter(readVer);
-
-            if (readVer.coordinatorVersion() == updateVer.coordinatorVersion()) {
-                msg = new CoordinatorAckRequestTxAndQuery(fut.id,
-                    updateVer.counter(),
-                    trackCntr);
-            }
-            else {
-                msg = new CoordinatorAckRequestTxAndQueryEx(fut.id,
-                    updateVer.counter(),
-                    readVer.coordinatorVersion(),
-                    trackCntr);
-            }
-        }
-        else
-            msg = new CoordinatorAckRequestTx(fut.id, updateVer.counter());
+        CoordinatorAckRequestTx msg = createTxAckMessage(fut.id, updateVer, readVer);
 
         try {
             ctx.io().sendToGridTopic(crd, MSG_TOPIC, msg, MSG_POLICY);
@@ -489,12 +471,40 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
         return fut;
     }
 
+    private CoordinatorAckRequestTx createTxAckMessage(long futId,
+        MvccCoordinatorVersion updateVer,
+        @Nullable MvccCoordinatorVersion readVer)
+    {
+        CoordinatorAckRequestTx msg;
+
+        if (readVer != null) {
+            long trackCntr = queryTrackCounter(readVer);
+
+            if (readVer.coordinatorVersion() == updateVer.coordinatorVersion()) {
+                msg = new CoordinatorAckRequestTxAndQuery(futId,
+                    updateVer.counter(),
+                    trackCntr);
+            }
+            else {
+                msg = new CoordinatorAckRequestTxAndQueryEx(futId,
+                    updateVer.counter(),
+                    readVer.coordinatorVersion(),
+                    trackCntr);
+            }
+        }
+        else
+            msg = new CoordinatorAckRequestTx(futId, updateVer.counter());
+
+        return msg;
+    }
+
     /**
      * @param crdId Coordinator node ID.
-     * @param mvccVer Transaction version.
+     * @param updateVer Transaction update version.
+     * @param readVer Transaction read version.
      */
-    public void ackTxRollback(UUID crdId, MvccCoordinatorVersion mvccVer) {
-        CoordinatorAckRequestTx msg = new CoordinatorAckRequestTx(0, mvccVer.counter());
+    public void ackTxRollback(UUID crdId, MvccCoordinatorVersion updateVer, @Nullable MvccCoordinatorVersion readVer) {
+        CoordinatorAckRequestTx msg = createTxAckMessage(0, updateVer, readVer);
 
         msg.skipResponse(true);
 

@@ -61,9 +61,9 @@ public class GridNearTxFinishAndAckFuture extends GridFutureAdapter<IgniteIntern
                     TxMvccInfo mvccInfo = tx.mvccInfo();
 
                     if (qryTracker != null)
-                        ackFut = qryTracker.onTxFinish(mvccInfo, fut.context());
+                        ackFut = qryTracker.onTxDone(mvccInfo, fut.context(), true);
                     else if (mvccInfo != null) {
-                        ackFut = fut.context().coordinators().ackTxCommit(mvccInfo.coordinator(),
+                        ackFut = fut.context().coordinators().ackTxCommit(mvccInfo.coordinatorNodeId(),
                             mvccInfo.version(),
                             null);
                     }
