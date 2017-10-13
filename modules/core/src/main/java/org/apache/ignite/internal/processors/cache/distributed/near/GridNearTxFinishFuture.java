@@ -458,7 +458,7 @@ public final class GridNearTxFinishFuture<K, V> extends GridCacheCompoundIdentit
                         GridDistributedTxMapping mapping = mappings.singleMapping();
 
                         if (mapping != null) {
-                            assert !hasFutures() : futures();
+                            assert !hasFutures() || waitTxs != null : futures();
 
                             finish(1, mapping, commit);
                         }
