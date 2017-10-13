@@ -45,7 +45,7 @@ import org.apache.ignite.internal.processors.cache.distributed.near.GridNearGetR
 import org.apache.ignite.internal.processors.cache.distributed.near.GridNearGetResponse;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinator;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorVersion;
-import org.apache.ignite.internal.processors.cache.mvcc.MvccQueryAware;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorChangeAware;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccQueryTracker;
 import org.apache.ignite.internal.processors.cache.persistence.CacheDataRow;
 import org.apache.ignite.internal.processors.cache.version.GridCacheVersion;
@@ -61,13 +61,15 @@ import org.apache.ignite.internal.util.typedef.P1;
 import org.apache.ignite.internal.util.typedef.internal.CU;
 import org.apache.ignite.internal.util.typedef.internal.S;
 import org.apache.ignite.internal.util.typedef.internal.U;
+import org.apache.ignite.lang.IgniteBiInClosure;
 import org.apache.ignite.lang.IgniteUuid;
 import org.jetbrains.annotations.Nullable;
 
 /**
  * Colocated get future.
  */
-public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAdapter<K, V> implements MvccQueryAware {
+public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAdapter<K, V>
+    implements MvccCoordinatorChangeAware, IgniteBiInClosure<AffinityTopologyVersion, IgniteCheckedException> {
     /** */
     private static final long serialVersionUID = 0L;
 
@@ -185,13 +187,14 @@ public class GridPartitionedGetFuture<K, V> extends CacheDistributedGetFutureAda
     }
 
     /** {@inheritDoc} */
-    @Override public void onMvccVersionReceived(AffinityTopologyVersion topVer) {
-        initialMap(topVer);
-    }
+    @Override public void apply(AffinityTopologyVersion topVer, IgniteCheckedException e) {
+        if (e != null)
+            onDone(e);
+        else {
+            assert topVer != null;
 
-    /** {@inheritDoc} */
-    @Override public void onMvccVersionError(IgniteCheckedException e) {
-        onDone(e);
+            initialMap(topVer);
+        }
     }
 
     /** {@inheritDoc} */

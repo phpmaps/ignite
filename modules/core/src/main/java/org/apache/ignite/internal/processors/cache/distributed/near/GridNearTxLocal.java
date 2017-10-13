@@ -47,10 +47,10 @@ import org.apache.ignite.internal.processors.cache.GridCacheContext;
 import org.apache.ignite.internal.processors.cache.GridCacheEntryEx;
 import org.apache.ignite.internal.processors.cache.GridCacheEntryRemovedException;
 import org.apache.ignite.internal.processors.cache.GridCacheMvccCandidate;
-import org.apache.ignite.internal.processors.cache.GridCacheVersionedFuture;
 import org.apache.ignite.internal.processors.cache.GridCacheOperation;
 import org.apache.ignite.internal.processors.cache.GridCacheReturn;
 import org.apache.ignite.internal.processors.cache.GridCacheSharedContext;
+import org.apache.ignite.internal.processors.cache.GridCacheVersionedFuture;
 import org.apache.ignite.internal.processors.cache.IgniteCacheExpiryPolicy;
 import org.apache.ignite.internal.processors.cache.KeyCacheObject;
 import org.apache.ignite.internal.processors.cache.distributed.GridDistributedCacheEntry;
@@ -62,8 +62,8 @@ import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtTxPrep
 import org.apache.ignite.internal.processors.cache.distributed.dht.colocated.GridDhtDetachedCacheEntry;
 import org.apache.ignite.internal.processors.cache.dr.GridCacheDrInfo;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinator;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorChangeAware;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorVersion;
-import org.apache.ignite.internal.processors.cache.mvcc.MvccQueryAware;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccQueryTracker;
 import org.apache.ignite.internal.processors.cache.transactions.IgniteInternalTx;
 import org.apache.ignite.internal.processors.cache.transactions.IgniteTxEntry;
@@ -93,6 +93,7 @@ import org.apache.ignite.internal.util.typedef.internal.CU;
 import org.apache.ignite.internal.util.typedef.internal.S;
 import org.apache.ignite.internal.util.typedef.internal.U;
 import org.apache.ignite.lang.IgniteBiClosure;
+import org.apache.ignite.lang.IgniteBiInClosure;
 import org.apache.ignite.lang.IgniteClosure;
 import org.apache.ignite.lang.IgniteInClosure;
 import org.apache.ignite.lang.IgniteUuid;
@@ -123,7 +124,8 @@ import static org.apache.ignite.transactions.TransactionState.UNKNOWN;
  * Replicated user transaction.
  */
 @SuppressWarnings("unchecked")
-public class GridNearTxLocal extends GridDhtTxLocalAdapter implements GridTimeoutObject, AutoCloseable {
+public class GridNearTxLocal extends GridDhtTxLocalAdapter implements GridTimeoutObject,
+    AutoCloseable, MvccCoordinatorChangeAware {
     /** */
     private static final long serialVersionUID = 0L;
 
@@ -237,8 +239,19 @@ public class GridNearTxLocal extends GridDhtTxLocalAdapter implements GridTimeou
             trackTimeout = cctx.time().addTimeoutObject(this);
     }
 
-    public MvccQueryTracker mvccQueryTracker() {
+    /**
+     * @return Mvcc query version tracker.
+     */
+    MvccQueryTracker mvccQueryTracker() {
         return mvccTracker;
+    }
+
+    /** {@inheritDoc} */
+    @Nullable @Override public MvccCoordinatorVersion onMvccCoordinatorChange(MvccCoordinator newCrd) {
+        if (mvccTracker != null)
+            return mvccTracker.onMvccCoordinatorChange(newCrd);
+
+        return null;
     }
 
     /** {@inheritDoc} */
@@ -1663,6 +1676,10 @@ public class GridNearTxLocal extends GridDhtTxLocalAdapter implements GridTimeou
         }
     }
 
+    /**
+     * @param cctx Cache context.
+     * @return Mvcc version for read inside tx (initialized once for OPTIMISTIC SERIALIZABLE and REPEATABLE_READ txs).
+     */
     private MvccCoordinatorVersion mvccReadVersion(GridCacheContext cctx) {
         if (!cctx.mvccEnabled() || mvccTracker == null)
             return null;
@@ -1695,42 +1712,40 @@ public class GridNearTxLocal extends GridDhtTxLocalAdapter implements GridTimeou
 
         init();
 
-        if (cacheCtx.mvccEnabled() && optimistic() && mvccTracker == null) {
-            // TODO IGNITE-3478: support rollback on timeout.
+        if (cacheCtx.mvccEnabled() && (optimistic() && !readCommitted()) && mvccTracker == null) {
+            // TODO IGNITE-3478: support async tx rollback (e.g. on timeout).
             final GridFutureAdapter fut = new GridFutureAdapter();
 
             boolean canRemap = cctx.lockedTopologyVersion(null) == null;
 
-            mvccTracker = new MvccQueryTracker(cacheCtx, canRemap, new MvccQueryAware() {
-                @Nullable @Override public MvccCoordinatorVersion onMvccCoordinatorChange(MvccCoordinator newCrd) {
-                    return mvccTracker.onMvccCoordinatorChange(newCrd);
-                }
-
-                @Override public void onMvccVersionReceived(AffinityTopologyVersion topVer) {
-                    getAllAsync(cacheCtx,
-                        entryTopVer,
-                        keys,
-                        deserializeBinary,
-                        skipVals,
-                        keepCacheObjects,
-                        skipStore,
-                        recovery,
-                        needVer).listen(new IgniteInClosure<IgniteInternalFuture<Map<Object, Object>>>() {
-                        @Override public void apply(IgniteInternalFuture<Map<Object, Object>> fut0) {
-                            try {
-                                fut.onDone(fut0.get());
-                            }
-                            catch (IgniteCheckedException e) {
-                                fut.onDone(e);
-                            }
+            mvccTracker = new MvccQueryTracker(cacheCtx, canRemap,
+                new IgniteBiInClosure<AffinityTopologyVersion, IgniteCheckedException>() {
+                    @Override public void apply(AffinityTopologyVersion topVer, IgniteCheckedException e) {
+                        if (e == null) {
+                            getAllAsync(cacheCtx,
+                                entryTopVer,
+                                keys,
+                                deserializeBinary,
+                                skipVals,
+                                keepCacheObjects,
+                                skipStore,
+                                recovery,
+                                needVer).listen(new IgniteInClosure<IgniteInternalFuture<Map<Object, Object>>>() {
+                                @Override
+                                public void apply(IgniteInternalFuture<Map<Object, Object>> fut0) {
+                                    try {
+                                        fut.onDone(fut0.get());
+                                    } catch (IgniteCheckedException e) {
+                                        fut.onDone(e);
+                                    }
+                                }
+                            });
                         }
-                    });
+                        else
+                            fut.onDone(e);
+                    }
                 }
-
-                @Override public void onMvccVersionError(IgniteCheckedException e) {
-                    fut.onDone(e);
-                }
-            });
+            );
 
             mvccTracker.requestVersion(topologyVersion());
 

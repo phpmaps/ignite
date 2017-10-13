@@ -17,27 +17,15 @@
 
 package org.apache.ignite.internal.processors.cache.mvcc;
 
-import org.apache.ignite.IgniteCheckedException;
-import org.apache.ignite.internal.processors.affinity.AffinityTopologyVersion;
 import org.jetbrains.annotations.Nullable;
 
 /**
  *
  */
-public interface MvccQueryAware {
+public interface MvccCoordinatorChangeAware {
     /**
      * @param newCrd New coordinator.
      * @return Version used by this query.
      */
     @Nullable public MvccCoordinatorVersion onMvccCoordinatorChange(MvccCoordinator newCrd);
-
-    /**
-     * @param topVer Topology version when version was requested.
-     */
-    public void onMvccVersionReceived(AffinityTopologyVersion topVer);
-
-    /**
-     * @param e Error.
-     */
-    public void onMvccVersionError(IgniteCheckedException e);
 }

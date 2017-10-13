@@ -26,14 +26,14 @@ import org.apache.ignite.internal.processors.cache.GridCacheContext;
 import org.apache.ignite.internal.processors.cache.GridCacheSharedContext;
 import org.apache.ignite.internal.util.tostring.GridToStringExclude;
 import org.apache.ignite.internal.util.typedef.internal.S;
+import org.apache.ignite.lang.IgniteBiInClosure;
 import org.apache.ignite.lang.IgniteInClosure;
 import org.jetbrains.annotations.Nullable;
 
 /**
  * TODO IGNITE-3478: make sure clean up is called when related future is forcibly finished, i.e. on cache stop
- * TODO IGNITE-3478: support remap to new coordinator.
  */
-public class MvccQueryTracker implements MvccQueryAware {
+public class MvccQueryTracker implements MvccCoordinatorChangeAware {
     /** */
     private MvccCoordinator mvccCrd;
 
@@ -49,29 +49,22 @@ public class MvccQueryTracker implements MvccQueryAware {
 
     /** */
     @GridToStringExclude
-    private final MvccQueryAware lsnr;
+    private final IgniteBiInClosure<AffinityTopologyVersion, IgniteCheckedException> lsnr;
 
     /**
      * @param cctx Cache context.
      * @param canRemap {@code True} if can wait for topology changes.
      * @param lsnr Listener.
      */
-    public MvccQueryTracker(GridCacheContext cctx, boolean canRemap, MvccQueryAware lsnr) {
+    public MvccQueryTracker(GridCacheContext cctx,
+        boolean canRemap,
+        IgniteBiInClosure<AffinityTopologyVersion, IgniteCheckedException> lsnr)
+    {
         assert cctx.mvccEnabled() : cctx.name();
 
         this.cctx = cctx;
         this.canRemap = canRemap;
         this.lsnr = lsnr;
-    }
-
-    @Override
-    public void onMvccVersionReceived(AffinityTopologyVersion topVer) {
-
-    }
-
-    @Override
-    public void onMvccVersionError(IgniteCheckedException e) {
-
     }
 
     /**
@@ -173,7 +166,7 @@ public class MvccQueryTracker implements MvccQueryAware {
         MvccCoordinator mvccCrd0 = cctx.affinity().mvccCoordinator(topVer);
 
         if (mvccCrd0 == null) {
-            lsnr.onMvccVersionError(new IgniteCheckedException("Mvcc coordinator is not assigned: " + topVer));
+            lsnr.apply(null, new IgniteCheckedException("Mvcc coordinator is not assigned: " + topVer));
 
             return;
         }
@@ -188,7 +181,7 @@ public class MvccQueryTracker implements MvccQueryAware {
             assert cctx.topology().topologyVersionFuture().initialVersion().compareTo(topVer) > 0;
 
             if (!canRemap) {
-                lsnr.onMvccVersionError(new ClusterTopologyCheckedException("Failed to request mvcc version, coordinator changed."));
+                lsnr.apply(null, new ClusterTopologyCheckedException("Failed to request mvcc version, coordinator changed."));
 
                 return;
             }
@@ -225,7 +218,7 @@ public class MvccQueryTracker implements MvccQueryAware {
                     }
 
                     if (!needRemap) {
-                        lsnr.onMvccVersionReceived(topVer);
+                        lsnr.apply(topVer, null);
 
                         return;
                     }
@@ -237,7 +230,7 @@ public class MvccQueryTracker implements MvccQueryAware {
                         log.debug("Mvcc coordinator failed, need remap: " + e);
                 }
                 catch (IgniteCheckedException e) {
-                    lsnr.onMvccVersionError(e);
+                    lsnr.apply(null, e);
 
                     return;
                 }
@@ -246,7 +239,7 @@ public class MvccQueryTracker implements MvccQueryAware {
                 if (canRemap)
                     waitNextTopology(topVer);
                 else {
-                    lsnr.onMvccVersionError(new ClusterTopologyCheckedException("Failed to " +
+                    lsnr.apply(null, new ClusterTopologyCheckedException("Failed to " +
                         "request mvcc version, coordinator failed."));
                 }
             }
@@ -271,7 +264,7 @@ public class MvccQueryTracker implements MvccQueryAware {
                         requestVersion(fut.get());
                     }
                     catch (IgniteCheckedException e) {
-                        lsnr.onMvccVersionError(e);
+                        lsnr.apply(null, e);
                     }
                 }
             });

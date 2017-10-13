@@ -96,6 +96,7 @@ import static org.apache.ignite.cache.CacheMode.REPLICATED;
 import static org.apache.ignite.cache.CacheWriteSynchronizationMode.FULL_SYNC;
 import static org.apache.ignite.transactions.TransactionConcurrency.OPTIMISTIC;
 import static org.apache.ignite.transactions.TransactionConcurrency.PESSIMISTIC;
+import static org.apache.ignite.transactions.TransactionIsolation.READ_COMMITTED;
 import static org.apache.ignite.transactions.TransactionIsolation.REPEATABLE_READ;
 import static org.apache.ignite.transactions.TransactionIsolation.SERIALIZABLE;
 
@@ -407,7 +408,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
     /**
      * @throws Exception If failed.
      */
-    public void testTxReadSnapshotSimple() throws Exception {
+    public void testTxReadIsolationSimple() throws Exception {
         Ignite srv0 = startGrids(4);
 
         client = true;
@@ -424,64 +425,80 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
             for (int i = 0; i < KEYS; i++)
                 startVals.put(i, 0);
 
-            for (final Ignite node : G.allGrids()) {
-                info("Test node: " + node.name());
+            for (final TransactionIsolation isolation : TransactionIsolation.values()) {
+                for (final Ignite node : G.allGrids()) {
+                    info("Run test [node=" + node.name() + ", isolation=" + isolation + ']');
 
-                try (Transaction tx = srv0.transactions().txStart(PESSIMISTIC, REPEATABLE_READ)) {
-                    cache0.putAll(startVals);
-
-                    tx.commit();
-                }
-
-                final CountDownLatch readStart = new CountDownLatch(1);
-
-                final CountDownLatch readProceed = new CountDownLatch(1);
-
-                IgniteInternalFuture fut = GridTestUtils.runAsync(new Callable<Void>() {
-                    @Override public Void call() throws Exception {
-                        IgniteCache<Object, Object> cache = node.cache(DEFAULT_CACHE_NAME);
-
-                        try (Transaction tx = node.transactions().txStart(OPTIMISTIC, SERIALIZABLE)) {
-                            assertEquals(0, cache.get(0));
-
-                            readStart.countDown();
-
-                            assertTrue(readProceed.await(5, TimeUnit.SECONDS));
-
-                            assertEquals(0, cache.get(1));
-
-                            assertEquals(0, cache.get(2));
-
-                            Map<Object, Object> res = cache.getAll(startVals.keySet());
-
-                            assertEquals(startVals.size(), res.size());
-
-                            for (Map.Entry<Object, Object> e : res.entrySet())
-                                assertEquals("Invalid value for key: " + e.getKey(), 0, e.getValue());
-
-                            tx.rollback();
-                        }
-
-                        return null;
-                    }
-                });
-
-                assertTrue(readStart.await(5, TimeUnit.SECONDS));
-
-                for (int i = 0; i < KEYS; i++) {
                     try (Transaction tx = srv0.transactions().txStart(PESSIMISTIC, REPEATABLE_READ)) {
-                        if (i % 2 == 0)
-                            cache0.put(i, 1);
-                        else
-                            cache0.remove(i);
+                        cache0.putAll(startVals);
 
                         tx.commit();
                     }
+
+                    final CountDownLatch readStart = new CountDownLatch(1);
+
+                    final CountDownLatch readProceed = new CountDownLatch(1);
+
+                    IgniteInternalFuture fut = GridTestUtils.runAsync(new Callable<Void>() {
+                        @Override public Void call() throws Exception {
+                            IgniteCache<Object, Object> cache = node.cache(DEFAULT_CACHE_NAME);
+
+                            try (Transaction tx = node.transactions().txStart(OPTIMISTIC, isolation)) {
+                                assertEquals(0, cache.get(0));
+
+                                readStart.countDown();
+
+                                assertTrue(readProceed.await(5, TimeUnit.SECONDS));
+
+                                if (isolation == READ_COMMITTED) {
+                                    assertNull(cache.get(1));
+
+                                    assertEquals(1, cache.get(2));
+
+                                    Map<Object, Object> res = cache.getAll(startVals.keySet());
+
+                                    assertEquals(startVals.size() / 2, res.size());
+
+                                    for (Map.Entry<Object, Object> e : res.entrySet())
+                                        assertEquals("Invalid value for key: " + e.getKey(), 1, e.getValue());
+                                }
+                                else {
+                                    assertEquals(0, cache.get(1));
+
+                                    assertEquals(0, cache.get(2));
+
+                                    Map<Object, Object> res = cache.getAll(startVals.keySet());
+
+                                    assertEquals(startVals.size(), res.size());
+
+                                    for (Map.Entry<Object, Object> e : res.entrySet())
+                                        assertEquals("Invalid value for key: " + e.getKey(), 0, e.getValue());
+                                }
+
+                                tx.rollback();
+                            }
+
+                            return null;
+                        }
+                    });
+
+                    assertTrue(readStart.await(5, TimeUnit.SECONDS));
+
+                    for (int i = 0; i < KEYS; i++) {
+                        try (Transaction tx = srv0.transactions().txStart(PESSIMISTIC, REPEATABLE_READ)) {
+                            if (i % 2 == 0)
+                                cache0.put(i, 1);
+                            else
+                                cache0.remove(i);
+
+                            tx.commit();
+                        }
+                    }
+
+                    readProceed.countDown();
+
+                    fut.get();
                 }
-
-                readProceed.countDown();
-
-                fut.get();
             }
 
             srv0.destroyCache(cache0.getName());
@@ -2886,21 +2903,36 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
      * @throws Exception If failed.
      */
     public void testReadInProgressCoordinatorFails() throws Exception {
-        readInProgressCoordinatorFails(false);
+        readInProgressCoordinatorFails(false, false);
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testReadInsideTxInProgressCoordinatorFails() throws Exception {
+        readInProgressCoordinatorFails(false, true);
     }
 
     /**
      * @throws Exception If failed.
      */
     public void testReadInProgressCoordinatorFails_ReadDelay() throws Exception {
-        readInProgressCoordinatorFails(true);
+        readInProgressCoordinatorFails(true, false);
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testReadInsideTxInProgressCoordinatorFails_ReadDelay() throws Exception {
+        readInProgressCoordinatorFails(true, true);
     }
 
     /**
      * @param readDelay {@code True} if delays get requests.
+     * @param readInTx {@code True} to read inside transaction.
      * @throws Exception If failed.
      */
-    private void readInProgressCoordinatorFails(boolean readDelay) throws Exception {
+    private void readInProgressCoordinatorFails(boolean readDelay, final boolean readInTx) throws Exception {
         final int COORD_NODES = 5;
         final int SRV_NODES = 4;
 
@@ -2973,7 +3005,17 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
                             for (String cacheName : cacheNames) {
                                 IgniteCache cache = node.cache(cacheName);
 
-                                Map<Integer, Integer> res = cache.getAll(vals.keySet());
+                                Map<Integer, Integer> res;
+
+                                if (readInTx) {
+                                    try (Transaction tx = node.transactions().txStart(OPTIMISTIC, SERIALIZABLE)) {
+                                        res = cache.getAll(vals.keySet());
+
+                                        tx.rollback();
+                                    }
+                                }
+                                else
+                                    res = cache.getAll(vals.keySet());
 
                                 assertEquals(vals.size(), res.size());
 
@@ -3000,7 +3042,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
                         throw e;
                     }
                 }
-            }, (SRV_NODES + 1) + 1, "get-thread");
+            }, ((SRV_NODES + 1) + 1) * 2, "get-thread");
 
             IgniteInternalFuture putFut1 = GridTestUtils.runAsync(new Callable() {
                 @Override public Void call() throws Exception {

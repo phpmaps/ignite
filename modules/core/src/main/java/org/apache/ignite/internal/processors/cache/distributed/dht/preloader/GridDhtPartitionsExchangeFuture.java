@@ -76,12 +76,10 @@ import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtLocalP
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtPartitionState;
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtPartitionTopology;
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtTopologyFutureAdapter;
-import org.apache.ignite.internal.processors.cache.distributed.near.GridNearTxLocal;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinator;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorVersion;
 import org.apache.ignite.internal.processors.cache.mvcc.MvccCounter;
-import org.apache.ignite.internal.processors.cache.mvcc.MvccQueryAware;
-import org.apache.ignite.internal.processors.cache.mvcc.MvccQueryTracker;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinatorChangeAware;
 import org.apache.ignite.internal.processors.cache.persistence.snapshot.SnapshotDiscoveryMessage;
 import org.apache.ignite.internal.processors.cache.transactions.IgniteInternalTx;
 import org.apache.ignite.internal.processors.cache.transactions.IgniteTxKey;
@@ -812,19 +810,11 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
 
             Map<MvccCounter, Integer> activeQrys = new HashMap<>();
 
-            for (GridCacheFuture<?> fut : cctx.mvcc().activeFutures()) {
-                if (fut instanceof MvccQueryAware)
-                    processMvccCoordinatorChange(mvccCrd, (MvccQueryAware)fut, activeQrys);
-            }
+            for (GridCacheFuture<?> fut : cctx.mvcc().activeFutures())
+                processMvccCoordinatorChange(mvccCrd, fut, activeQrys);
 
-            for (IgniteInternalTx tx : cctx.tm().activeTransactions()) {
-                if (tx instanceof GridNearTxLocal) {
-                    MvccQueryTracker qryTracker = ((GridNearTxLocal)tx).mvccQueryTracker();
-
-                    if (qryTracker != null)
-                        processMvccCoordinatorChange(mvccCrd, qryTracker, activeQrys);
-                }
-            }
+            for (IgniteInternalTx tx : cctx.tm().activeTransactions())
+                processMvccCoordinatorChange(mvccCrd, tx, activeQrys);
 
             exchCtx.addActiveQueries(cctx.localNodeId(), activeQrys);
 
@@ -835,24 +825,26 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
 
     /**
      * @param mvccCrd New coordinator.
-     * @param qryAware Mvcc query aware.
+     * @param nodeObj Node object.
      * @param activeQrys Active queries map to update.
      */
     private void processMvccCoordinatorChange(MvccCoordinator mvccCrd,
-        MvccQueryAware qryAware,
+        Object nodeObj,
         Map<MvccCounter, Integer> activeQrys)
     {
-        MvccCoordinatorVersion ver = qryAware.onMvccCoordinatorChange(mvccCrd);
+        if (nodeObj instanceof MvccCoordinatorChangeAware) {
+            MvccCoordinatorVersion ver = ((MvccCoordinatorChangeAware)nodeObj).onMvccCoordinatorChange(mvccCrd);
 
-        if (ver != null ) {
-            MvccCounter cntr = new MvccCounter(ver.coordinatorVersion(), ver.counter());
+            if (ver != null ) {
+                MvccCounter cntr = new MvccCounter(ver.coordinatorVersion(), ver.counter());
 
-            Integer cnt = activeQrys.get(cntr);
+                Integer cnt = activeQrys.get(cntr);
 
-            if (cnt == null)
-                activeQrys.put(cntr, 1);
-            else
-                activeQrys.put(cntr, cnt + 1);
+                if (cnt == null)
+                    activeQrys.put(cntr, 1);
+                else
+                    activeQrys.put(cntr, cnt + 1);
+            }
         }
     }
 
