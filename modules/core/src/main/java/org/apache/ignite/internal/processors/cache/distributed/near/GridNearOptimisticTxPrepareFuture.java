@@ -41,6 +41,7 @@ import org.apache.ignite.internal.processors.cache.GridCacheMvccCandidate;
 import org.apache.ignite.internal.processors.cache.GridCacheSharedContext;
 import org.apache.ignite.internal.processors.cache.distributed.GridDistributedTxMapping;
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtTxMapping;
+import org.apache.ignite.internal.processors.cache.mvcc.MvccCoordinator;
 import org.apache.ignite.internal.processors.cache.transactions.IgniteInternalTx;
 import org.apache.ignite.internal.processors.cache.transactions.IgniteTxEntry;
 import org.apache.ignite.internal.processors.cache.transactions.IgniteTxKey;
@@ -49,7 +50,6 @@ import org.apache.ignite.internal.transactions.IgniteTxRollbackCheckedException;
 import org.apache.ignite.internal.transactions.IgniteTxTimeoutCheckedException;
 import org.apache.ignite.internal.util.future.GridEmbeddedFuture;
 import org.apache.ignite.internal.util.future.GridFutureAdapter;
-import org.apache.ignite.internal.util.tostring.GridToStringExclude;
 import org.apache.ignite.internal.util.tostring.GridToStringInclude;
 import org.apache.ignite.internal.util.typedef.C1;
 import org.apache.ignite.internal.util.typedef.CI1;
@@ -72,10 +72,6 @@ import static org.apache.ignite.transactions.TransactionState.PREPARING;
  *
  */
 public class GridNearOptimisticTxPrepareFuture extends GridNearOptimisticTxPrepareFutureAdapter {
-    /** */
-    @GridToStringExclude
-    private KeyLockFuture keyLockFut;
-
     /** */
     private int miniId;
 
@@ -382,6 +378,18 @@ public class GridNearOptimisticTxPrepareFuture extends GridNearOptimisticTxPrepa
             return;
         }
 
+        if (write.context().mvccEnabled()) {
+            MvccCoordinator mvccCrd = write.context().affinity().mvccCoordinator(topVer);
+
+            if (mvccCrd == null) {
+                onDone(new IgniteCheckedException("Mvcc coordinator is not assigned: " + topVer));
+
+                return;
+            }
+
+            initMvccVersionFuture(mvccCrd, keyLockFut != null ? 2 : 1, remap);
+        }
+
         if (keyLockFut != null)
             keyLockFut.onAllKeysAdded();
 
@@ -426,14 +434,27 @@ public class GridNearOptimisticTxPrepareFuture extends GridNearOptimisticTxPrepa
 
         boolean hasNearCache = false;
 
+        MvccCoordinator mvccCrd = null;
+
         for (IgniteTxEntry write : writes) {
             write.clearEntryReadVersion();
 
             GridDistributedTxMapping updated = map(write, topVer, cur, topLocked, remap);
 
-            if(updated == null)
-                // an exception occurred while transaction mapping, stop further processing
+            if (updated == null) {
+                // An exception occurred while transaction mapping, stop further processing.
                 break;
+            }
+
+            if (write.context().mvccEnabled() && mvccCrd == null) {
+                mvccCrd = write.context().affinity().mvccCoordinator(topVer);
+
+                if (mvccCrd == null) {
+                    onDone(new IgniteCheckedException("Mvcc coordinator is not assigned: " + topVer));
+
+                    break;
+                }
+            }
 
             if (write.context().isNear())
                 hasNearCache = true;
@@ -474,6 +495,11 @@ public class GridNearOptimisticTxPrepareFuture extends GridNearOptimisticTxPrepa
             return;
         }
 
+        assert !tx.txState().mvccEnabled(cctx) || mvccCrd != null;
+
+        if (mvccCrd != null)
+            initMvccVersionFuture(mvccCrd, keyLockFut != null ? 2 : 1, remap);
+
         if (keyLockFut != null)
             keyLockFut.onAllKeysAdded();
 
@@ -497,8 +523,12 @@ public class GridNearOptimisticTxPrepareFuture extends GridNearOptimisticTxPrepa
     private void proceedPrepare(final Queue<GridDistributedTxMapping> mappings) {
         final GridDistributedTxMapping m = mappings.poll();
 
-        if (m == null)
+        if (m == null) {
+            if (mvccVerFut != null)
+                mvccVerFut.onLockReceived();
+
             return;
+        }
 
         proceedPrepare(m, mappings);
     }
@@ -954,6 +984,8 @@ public class GridNearOptimisticTxPrepareFuture extends GridNearOptimisticTxPrepa
                         // Proceed prepare before finishing mini future.
                         if (mappings != null)
                             parent.proceedPrepare(mappings);
+                        else if (parent.mvccVerFut != null)
+                            parent.mvccVerFut.onLockReceived();
 
                         // Finish this mini future.
                         onDone((GridNearTxPrepareResponse)null);

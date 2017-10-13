@@ -197,8 +197,22 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
     /**
      * @throws Exception If failed.
      */
-    public void testSerializableTx1() throws Exception {
+    public void testOptimisticSerializableTx1() throws Exception {
         checkTx1(OPTIMISTIC, SERIALIZABLE);
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testOptimisticRepeatableReadTx1() throws Exception {
+        checkTx1(OPTIMISTIC, REPEATABLE_READ);
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testOptimisticReadCommittedTx1() throws Exception {
+        checkTx1(OPTIMISTIC, READ_COMMITTED);
     }
 
     /**
@@ -254,7 +268,7 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
     /**
      * @throws Exception If failed.
      */
-    public void testSerializableTx2() throws Exception {
+    public void testOptimisticSerializableTx2() throws Exception {
         checkTx2(OPTIMISTIC, SERIALIZABLE);
     }
 
@@ -2397,6 +2411,13 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
     }
 
     /**
+     * @throws Exception If failed.
+     */
+    public void testCoordinatorFailureSimpleOptimisticTx() throws Exception {
+        coordinatorFailureSimple(OPTIMISTIC, REPEATABLE_READ);
+    }
+
+    /**
      * @param concurrency Transaction concurrency.
      * @param isolation Transaction isolation.
      * @throws Exception If failed.
@@ -2479,6 +2500,13 @@ public class CacheMvccTransactionsTest extends GridCommonAbstractTest {
      */
     public void testTxPrepareFailureSimpleSerializableTx() throws Exception {
         txPrepareFailureSimple(OPTIMISTIC, SERIALIZABLE);
+    }
+
+    /**
+     * @throws Exception If failed.
+     */
+    public void testTxPrepareFailureSimpleOptimisticTx() throws Exception {
+        txPrepareFailureSimple(OPTIMISTIC, REPEATABLE_READ);
     }
 
     /**
