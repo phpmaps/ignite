@@ -29,6 +29,9 @@ import org.apache.ignite.plugin.extensions.communication.MessageWriter;
  */
 public class TxMvccInfo implements Message {
     /** */
+    private static final long serialVersionUID = 0L;
+
+    /** */
     private UUID crd;
 
     /** */

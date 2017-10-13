@@ -33,6 +33,9 @@ import org.jetbrains.annotations.Nullable;
  */
 public class CoordinatorActiveQueriesMessage implements MvccCoordinatorMessage {
     /** */
+    private static final long serialVersionUID = 0L;
+
+    /** */
     @GridDirectMap(keyType = Message.class, valueType = Integer.class)
     private Map<MvccCounter, Integer> activeQrys;
 
