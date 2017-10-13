@@ -20,9 +20,13 @@ package org.apache.ignite.internal.processors.cache.mvcc;
 import java.nio.ByteBuffer;
 import java.util.Map;
 import org.apache.ignite.internal.GridDirectMap;
+import org.apache.ignite.internal.managers.communication.GridIoMessageFactory;
+import org.apache.ignite.internal.util.typedef.internal.S;
 import org.apache.ignite.plugin.extensions.communication.Message;
+import org.apache.ignite.plugin.extensions.communication.MessageCollectionItemType;
 import org.apache.ignite.plugin.extensions.communication.MessageReader;
 import org.apache.ignite.plugin.extensions.communication.MessageWriter;
+import org.jetbrains.annotations.Nullable;
 
 /**
  *
@@ -32,31 +36,98 @@ public class CoordinatorActiveQueriesMessage implements MvccCoordinatorMessage {
     @GridDirectMap(keyType = Message.class, valueType = Integer.class)
     private Map<MvccCounter, Integer> activeQrys;
 
+    /**
+     * Required by {@link GridIoMessageFactory}.
+     */
+    public CoordinatorActiveQueriesMessage() {
+        // No-op.
+    }
+
+    /**
+     * @param activeQrys Active queries.
+     */
+    CoordinatorActiveQueriesMessage(Map<MvccCounter, Integer> activeQrys) {
+        this.activeQrys = activeQrys;
+    }
+
+    /**
+     * @return Active queries.
+     */
+    @Nullable Map<MvccCounter, Integer> activeQueries() {
+        return activeQrys;
+    }
+
+    /** {@inheritDoc} */
     @Override public boolean waitForCoordinatorInit() {
         return false;
     }
 
+    /** {@inheritDoc} */
     @Override public boolean processedFromNioThread() {
         return true;
     }
 
+    /** {@inheritDoc} */
     @Override public boolean writeTo(ByteBuffer buf, MessageWriter writer) {
-        return false;
+        writer.setBuffer(buf);
+
+        if (!writer.isHeaderWritten()) {
+            if (!writer.writeHeader(directType(), fieldsCount()))
+                return false;
+
+            writer.onHeaderWritten();
+        }
+
+        switch (writer.state()) {
+            case 0:
+                if (!writer.writeMap("activeQrys", activeQrys, MessageCollectionItemType.MSG, MessageCollectionItemType.INT))
+                    return false;
+
+                writer.incrementState();
+
+        }
+
+        return true;
     }
 
+    /** {@inheritDoc} */
     @Override public boolean readFrom(ByteBuffer buf, MessageReader reader) {
-        return false;
+        reader.setBuffer(buf);
+
+        if (!reader.beforeMessageRead())
+            return false;
+
+        switch (reader.state()) {
+            case 0:
+                activeQrys = reader.readMap("activeQrys", MessageCollectionItemType.MSG, MessageCollectionItemType.INT, false);
+
+                if (!reader.isLastRead())
+                    return false;
+
+                reader.incrementState();
+
+        }
+
+        return reader.afterMessageRead(CoordinatorActiveQueriesMessage.class);
     }
 
+    /** {@inheritDoc} */
     @Override public short directType() {
-        return 0;
+        return 144;
     }
 
+    /** {@inheritDoc} */
     @Override public byte fieldsCount() {
-        return 0;
+        return 1;
     }
 
+    /** {@inheritDoc} */
     @Override public void onAckReceived() {
+        // No-op.
+    }
 
+    /** {@inheritDoc} */
+    @Override public String toString() {
+        return S.toString(CoordinatorActiveQueriesMessage.class, this);
     }
 }

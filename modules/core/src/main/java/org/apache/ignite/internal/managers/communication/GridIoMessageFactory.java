@@ -104,6 +104,7 @@ import org.apache.ignite.internal.processors.cache.distributed.near.GridNearTxPr
 import org.apache.ignite.internal.processors.cache.distributed.near.GridNearTxPrepareResponse;
 import org.apache.ignite.internal.processors.cache.distributed.near.GridNearUnlockRequest;
 import org.apache.ignite.internal.processors.cache.mvcc.CoordinatorAckRequestTxAndQueryEx;
+import org.apache.ignite.internal.processors.cache.mvcc.CoordinatorActiveQueriesMessage;
 import org.apache.ignite.internal.processors.cache.mvcc.CoordinatorFutureResponse;
 import org.apache.ignite.internal.processors.cache.mvcc.CoordinatorAckRequestQuery;
 import org.apache.ignite.internal.processors.cache.mvcc.CoordinatorQueryVersionRequest;
@@ -950,6 +951,11 @@ public class GridIoMessageFactory implements MessageFactory {
 
             case 143:
                 msg = new MvccCounter();
+
+                return msg;
+
+            case 144:
+                msg = new CoordinatorActiveQueriesMessage();
 
                 return msg;
 

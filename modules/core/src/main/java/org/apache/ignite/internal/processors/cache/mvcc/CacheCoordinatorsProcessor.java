@@ -1068,14 +1068,33 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
      */
     public void processClientActiveQueries(UUID nodeId,
         @Nullable Map<MvccCounter, Integer> activeQueries) {
-        prevCrdQueries.processClientActiveQueries(nodeId, activeQueries);
+        prevCrdQueries.addNodeActiveQueries(nodeId, activeQueries);
     }
 
     /**
-     * @param activeQueries
+     * @param nodeId Node ID.
+     * @param msg Message.
+     */
+    private void processCoordinatorActiveQueriesMessage(UUID nodeId, CoordinatorActiveQueriesMessage msg) {
+        prevCrdQueries.addNodeActiveQueries(nodeId, msg.activeQueries());
+    }
+
+    /**
+     * @param nodeId Coordinator node ID.
+     * @param activeQueries Active queries.
      */
     public void sendActiveQueries(UUID nodeId, @Nullable Map<MvccCounter, Integer> activeQueries) {
+        CoordinatorActiveQueriesMessage msg = new CoordinatorActiveQueriesMessage(activeQueries);
 
+        try {
+            ctx.io().sendToGridTopic(nodeId,
+                MSG_TOPIC,
+                msg,
+                MSG_POLICY);
+        }
+        catch (IgniteCheckedException e) {
+            U.error(log, "Failed to send active queries to mvcc coordinator: " + e);
+        }
     }
 
     /**
@@ -1324,6 +1343,8 @@ public class CacheCoordinatorsProcessor extends GridProcessorAdapter {
                 processCoordinatorWaitTxsRequest(nodeId, (CoordinatorWaitTxsRequest)msg);
             else if (msg instanceof NewCoordinatorQueryAckRequest)
                 processNewCoordinatorQueryAckRequest(nodeId, (NewCoordinatorQueryAckRequest)msg);
+            else if (msg instanceof CoordinatorActiveQueriesMessage)
+                processCoordinatorActiveQueriesMessage(nodeId, (CoordinatorActiveQueriesMessage)msg);
             else
                 U.warn(log, "Unexpected message received [node=" + nodeId + ", msg=" + msg + ']');
         }

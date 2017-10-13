@@ -125,7 +125,7 @@ class PreviousCoordinatorQueries {
      * @param nodeId Node ID.
      * @param nodeQueries Active queries started on node.
      */
-    void processClientActiveQueries(UUID nodeId, @Nullable Map<MvccCounter, Integer> nodeQueries) {
+    void addNodeActiveQueries(UUID nodeId, @Nullable Map<MvccCounter, Integer> nodeQueries) {
         synchronized (this) {
             if (initDone)
                 return;
