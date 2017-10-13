@@ -829,6 +829,7 @@ public class GridNearOptimisticTxPrepareFuture extends GridNearOptimisticTxPrepa
         return S.toString(GridNearOptimisticTxPrepareFuture.class, this,
             "innerFuts", futs,
             "keyLockFut", keyLockFut,
+            "mvccVerFut", mvccVerFut,
             "tx", tx,
             "super", super.toString());
     }

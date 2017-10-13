@@ -349,5 +349,10 @@ public abstract class GridNearOptimisticTxPrepareFutureAdapter extends GridNearT
 
             onDone();
         }
+
+        /** {@inheritDoc} */
+        @Override public String toString() {
+            return "MvccVersionFuture [crd=" + crd.nodeId() + ", lockCnt=" + lockCnt + ", isDone=" + isDone() + ']';
+        }
     }
 }
